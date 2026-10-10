@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="description" content="Pasos, rutina, espalda, peso, presión, colesterol y agua en un solo lugar.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Salud Activa</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <h1>Salud Activa</h1>
+  <span id="topDate" class="muted"></span>
+</header>
+
+<main id="view" aria-live="polite"></main>
+
+<nav id="nav" aria-label="Secciones">
+  <button data-a="tab" data-t="hoy"><span>🏠</span>Hoy</button>
+  <button data-a="tab" data-t="pasos"><span>👣</span>Pasos</button>
+  <button data-a="tab" data-t="espalda"><span>🧘</span>Espalda</button>
+  <button data-a="tab" data-t="salud"><span>❤️</span>Salud</button>
+  <button data-a="tab" data-t="ajustes"><span>⚙️</span>Ajustes</button>
+</nav>
+
+<div id="timer" hidden>
+  <div><small id="timerLabel"></small><b id="timerTime">0:00</b></div>
+  <button data-a="timer-stop" aria-label="Detener temporizador">✕</button>
+</div>
+
+<div id="toast" role="status"></div>
+<div id="informe"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

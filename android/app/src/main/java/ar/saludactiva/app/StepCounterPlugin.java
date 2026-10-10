@@ -9,7 +9,13 @@ import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.SharedPreferences;
 import android.os.SystemClock;
+import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
+import java.util.concurrent.TimeUnit;
+import org.json.JSONArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -107,5 +113,36 @@ public class StepCounterPlugin extends Plugin {
                 call.reject("El sensor de pasos no respondió");
             }
         }, 8000);
+    }
+
+    // ---- Lectura en segundo plano (WorkManager, ~cada 15 min) ----
+
+    @PluginMethod
+    public void startBackground(PluginCall call) {
+        PeriodicWorkRequest req = new PeriodicWorkRequest.Builder(StepWorker.class, 15, TimeUnit.MINUTES).build();
+        WorkManager.getInstance(getContext()).enqueueUniquePeriodicWork("step-bg", ExistingPeriodicWorkPolicy.KEEP, req);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopBackground(PluginCall call) {
+        WorkManager.getInstance(getContext()).cancelUniqueWork("step-bg");
+        call.resolve();
+    }
+
+    // Devuelve y borra las lecturas guardadas por el trabajo en segundo plano.
+    @PluginMethod
+    public void drain(PluginCall call) {
+        JSObject r = new JSObject();
+        synchronized (StepWorker.LOCK) {
+            SharedPreferences p = getContext().getSharedPreferences(StepWorker.PREFS, Context.MODE_PRIVATE);
+            try {
+                r.put("readings", new JSONArray(p.getString(StepWorker.KEY, "[]")));
+            } catch (Exception e) {
+                r.put("readings", new JSONArray());
+            }
+            p.edit().remove(StepWorker.KEY).apply();
+        }
+        call.resolve(r);
     }
 }

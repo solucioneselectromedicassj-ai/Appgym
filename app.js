@@ -2,7 +2,7 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
-  const APP_V = '2.0.3';
+  const APP_V = '2.1.0';
   // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
   const CAP = window.Capacitor;
   const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
@@ -50,7 +50,7 @@
   /* ---------- Estado ---------- */
   const DEFAULTS = () => ({
     v: 2,
-    settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00' },
+    settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00', segundoPlano: true },
     days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}, sensor: null
   });
 
@@ -190,6 +190,18 @@
   /* ---------- Pasos automáticos: sensor del teléfono (solo app Android) ---------- */
   // El hardware suma los pasos todo el día, con la app cerrada. Al abrirla se suma la diferencia desde la última lectura.
   const sensor = { on: false, msg: NATIVE ? 'Tocá "Activar contador de pasos" para empezar.' : '', last: 0 };
+  // Reparte lo contado por el sensor: cada lectura {t: hora, c: contador, b: arranque del teléfono} suma la diferencia al día de esa hora.
+  function acreditar(l) {
+    if (S.sensor && l.t < S.sensor.t) return;
+    let delta;
+    if (!S.sensor) { const m0 = new Date(l.t); m0.setHours(0, 0, 0, 0); delta = l.b >= m0.getTime() - 60000 ? l.c : 0; } // si el teléfono se encendió ese día, todo lo contado es de ese día
+    else delta = l.c >= S.sensor.last ? l.c - S.sensor.last : l.c; // si bajó, el teléfono se reinició
+    S.sensor = { last: l.c, t: l.t };
+    if (delta > 0 && delta < 60000) day(ymd(new Date(l.t))).pasos += delta;
+  }
+  async function aplicarSegundoPlano(P) {
+    try { if (S.settings.segundoPlano) await P.startBackground(); else await P.stopBackground(); } catch (e) { /* sin segundo plano */ }
+  }
   async function syncSensor(pedir) {
     const P = plug('StepCounter');
     if (!P) { sensor.msg = 'Esta versión de la app no tiene el contador de pasos.'; return refreshPasos(); }
@@ -198,17 +210,22 @@
       let g = (await conTiempo(P.hasPermission(), 10000)).granted;
       if (!g && pedir) { sensor.msg = 'Pidiendo permiso de actividad física…'; refreshPasos(); g = (await conTiempo(P.ensurePermission(), 120000)).granted; }
       if (!g) { sensor.on = false; sensor.msg = pedir ? 'No diste el permiso. Activalo en Ajustes del teléfono → Apps → Salud Activa → Permisos → Actividad física.' : 'Tocá "Activar contador de pasos" para empezar.'; return refreshPasos(); }
-      const r = await conTiempo(P.read(), 15000), v = Math.round(r.counter);
-      let delta = 0;
-      if (!S.sensor) { const m0 = new Date(); m0.setHours(0, 0, 0, 0); delta = r.bootTime >= m0.getTime() - 60000 ? v : 0; } // si el teléfono se encendió hoy, todo lo contado es de hoy
-      else delta = v >= S.sensor.last ? v - S.sensor.last : v; // si bajó, el teléfono se reinició
-      S.sensor = { last: v, t: Date.now() };
-      if (delta > 0 && delta < 60000) day().pasos += delta;
+      let lecturas = [];
+      try { lecturas = ((await conTiempo(P.drain(), 10000)).readings || []).filter(l => l && Number.isFinite(l.t) && Number.isFinite(l.c)); } catch (e) { /* sin lecturas en segundo plano */ }
+      const r = await conTiempo(P.read(), 15000);
+      lecturas.push({ t: Date.now(), c: Math.round(r.counter), b: r.bootTime });
+      lecturas.sort((a, b) => a.t - b.t).forEach(acreditar);
+      await aplicarSegundoPlano(P);
       sensor.on = true; sensor.last = Date.now(); sensor.msg = '';
       save(); refreshPasos();
     } catch (e) {
       sensor.on = false; sensor.msg = `No se pudo leer el contador de pasos (${esc((e && (e.message || e)) || 'error')}).`; refreshPasos();
     }
+  }
+  async function toggleSegundoPlano() {
+    S.settings.segundoPlano = !S.settings.segundoPlano; save();
+    const P = plug('StepCounter'); if (P) await aplicarSegundoPlano(P);
+    toast(S.settings.segundoPlano ? 'Actualización en segundo plano activada' : 'Actualización en segundo plano detenida'); render();
   }
 
   /* ---------- Pasos desde Health Connect (opcional, solo app Android) ---------- */
@@ -331,7 +348,8 @@
     ${NATIVE ? `<div class="card"><h3>Pasos automáticos</h3>
       <p>${sensor.on ? `Contando con el sensor de pasos del teléfono. Última lectura: ${pad(new Date(sensor.last).getHours())}:${pad(new Date(sensor.last).getMinutes())}.` : esc(sensor.msg)}</p>
       <div class="row"><button class="${sensor.on ? 'ghost' : 'pri'} grow" data-a="sensor-sync">${sensor.on ? 'Actualizar ahora' : 'Activar contador de pasos'}</button></div>
-      <small>El teléfono cuenta los pasos todo el día, aunque la app esté cerrada; la app los suma cada vez que la abrís.</small></div>
+      <div class="row" style="margin-top:8px"><button class="${S.settings.segundoPlano ? 'dang' : 'pri'} grow" data-a="bg-toggle">${S.settings.segundoPlano ? 'Detener actualización en segundo plano' : 'Reanudar actualización en segundo plano'}</button></div>
+      <small>Segundo plano: ${S.settings.segundoPlano ? 'activo, anota los pasos cada ~15 min aunque la app esté cerrada' : 'detenido; los pasos se suman cuando abrís la app'}. Si el teléfono se pone lento, detenelo desde acá.</small></div>
     <div class="card"><h3>Health Connect (opcional)</h3>
       <p>${health.on ? `Conectado. Última lectura: ${pad(new Date(health.last).getHours())}:${pad(new Date(health.last).getMinutes())}.` : esc(health.msg)}</p>
       <div class="row"><button class="ghost grow" data-a="health-sync">${health.on ? 'Importar de nuevo' : 'Importar de Health Connect'}</button></div>
@@ -549,6 +567,7 @@
       case 'motion': toggleMotion(); break;
       case 'health-sync': syncPasos(true); break;
       case 'sensor-sync': syncSensor(true); break;
+      case 'bg-toggle': toggleSegundoPlano(); break;
       case 'pasos-add': case 'pasos-set': {
         const n = Math.round(num($('#pasosInput').value));
         if (!(n >= 0) || n > 100000) { toast('Ingresá una cantidad válida'); break; }

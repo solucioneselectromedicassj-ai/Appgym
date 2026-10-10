@@ -27,6 +27,8 @@ android/        proyecto Android generado por Capacitor (manifest con Health Con
 ## App Android (Capacitor)
 La misma PWA se empaqueta como APK. `app.js` detecta `window.Capacitor` (`NATIVE`):
 - **Pasos**: lee los pasos del día/semana de Health Connect (`capacitor-health`, solo permiso `READ_STEPS`) al abrir, al volver a la app y cada 5 min. Los pasos los registra Google Fit / Salud de Samsung / etc.; la app no mide por sí misma.
+- **Pasos del sensor** (`StepCounterPlugin`, `StepWorker`): `TYPE_STEP_COUNTER` del teléfono + WorkManager cada ~15 min guarda lecturas en SharedPreferences; la app las recoge al abrirse (`drain`) y reparte la diferencia por día (`acreditar`). Se puede detener/reanudar desde Pasos (`settings.segundoPlano`). Health Connect queda como importación manual opcional.
+- **Plugins nativos en JS**: se acceden con `Capacitor.Plugins.<Nombre>` (`plug()`), no hay bundler.
 - **Recordatorios**: notificaciones locales programadas (`@capacitor/local-notifications`), funcionan con la app cerrada. Se reprograman en `setupReminders()` cada vez que se guardan los ajustes.
 - En la app nativa no se registra el service worker (los archivos van dentro del APK).
 - Compilar: GitHub → Actions → "APK Android" → artefacto `salud-activa-apk` (APK debug). Localmente: `npm ci && npm run sync` y abrir `android/` en Android Studio.
@@ -63,7 +65,7 @@ Si se cambia el formato, mantener `load()` tolerante y subir `v`. Si se cambian 
 - Editar los archivos existentes en lugar de reescribirlos.
 
 ## Límites conocidos y próximos pasos
-1. **Pasos**: en la web, acelerómetro con la pantalla encendida + carga manual. En Android, Health Connect (depende de que otra app registre los pasos). Falta lectura en segundo plano sin abrir la app.
+1. **Pasos**: en la web, acelerómetro con la pantalla encendida + carga manual. En Android, Health Connect (depende de que otra app registre los pasos). En Android hay lectura en segundo plano cada ~15 min (puede frenarla el ahorro de batería del fabricante).
 2. **Recordatorios en la web**: solo con la app abierta. En la app Android ya son nativos.
 3. **Sincronización entre dispositivos**: opcional con Supabase (misma pila de los otros proyectos), con RLS por usuario.
 4. Ideas: racha de días, registro de sueño y energía, ajuste de rutina según "Me dolió", exportar PDF, calentamiento guiado.

@@ -179,25 +179,33 @@
   /* ---------- Pasos automáticos (Health Connect, solo app Android) ---------- */
   const health = { on: false, msg: NATIVE ? 'Todavía no conectaste Health Connect.' : '', last: 0 };
   const refreshPasos = () => { if (tab === 'pasos' || tab === 'hoy') render(); };
+  const conTiempo = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('tiempo agotado')), ms))]);
+  // El plugin devuelve { permissions: { READ_STEPS: true } } (objeto); se acepta también una lista de objetos.
+  const pasosOk = r => { const p = r && r.permissions; return Array.isArray(p) ? p.some(x => x && x.READ_STEPS) : !!(p && p.READ_STEPS); };
+  let sincronizando = false;
   async function syncPasos(pedir) {
-    const H = plug('HealthPlugin'); if (!H) return;
+    if (!NATIVE) return;
+    const H = plug('HealthPlugin');
+    if (!H) { health.on = false; health.msg = 'Esta app no tiene el módulo de Health Connect.'; return refreshPasos(); }
+    if (sincronizando) return;
+    sincronizando = true;
     try {
-      if (!(await H.isHealthAvailable()).available) {
+      if (pedir) { health.msg = 'Conectando con Health Connect…'; refreshPasos(); }
+      if (!(await conTiempo(H.isHealthAvailable(), 15000)).available) {
         health.on = false; health.msg = 'Health Connect no está instalado o no está disponible en este teléfono.';
         if (pedir) { try { await H.showHealthConnectInPlayStore(); } catch (e) { /* nada */ } }
         return refreshPasos();
       }
       const q = { permissions: ['READ_STEPS'] };
-      const ok = r => (r.permissions || []).some(p => p && p.READ_STEPS);
-      let r = await H.checkHealthPermissions(q);
-      if (!ok(r) && pedir) r = await H.requestHealthPermissions(q);
-      if (!ok(r)) {
+      let r = await conTiempo(H.checkHealthPermissions(q), 15000);
+      if (!pasosOk(r) && pedir) r = await conTiempo(H.requestHealthPermissions(q), 120000);
+      if (!pasosOk(r)) {
         health.on = false;
         health.msg = pedir ? 'No diste el permiso. Podés darlo en Health Connect → Permisos de aplicaciones → Salud Activa.' : 'Todavía no conectaste Health Connect.';
         return refreshPasos();
       }
       const fin = new Date(), ini = new Date(fin.getFullYear(), fin.getMonth(), fin.getDate() - 6);
-      const res = await H.queryAggregated({ startDate: ini.toISOString(), endDate: fin.toISOString(), dataType: 'steps', bucket: 'day' });
+      const res = await conTiempo(H.queryAggregated({ startDate: ini.toISOString(), endDate: fin.toISOString(), dataType: 'steps', bucket: 'day' }), 30000);
       (res.aggregatedData || []).forEach(a => {
         const v = Math.round(a.value), k = ymd(new Date(a.startDate));
         if (v > 0 && v <= 100000) { const d = day(k); if (v > d.pasos) d.pasos = v; }
@@ -205,8 +213,8 @@
       health.on = true; health.last = Date.now(); health.msg = '';
       save(); refreshPasos();
     } catch (e) {
-      health.on = false; health.msg = 'No se pudieron leer los pasos de Health Connect.'; refreshPasos();
-    }
+      health.on = false; health.msg = `No se pudieron leer los pasos de Health Connect (${esc((e && (e.message || e)) || 'error')}).`; refreshPasos();
+    } finally { sincronizando = false; }
   }
 
   /* ---------- Avisos de salud ---------- */

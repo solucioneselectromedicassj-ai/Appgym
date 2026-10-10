@@ -1,6 +1,6 @@
 /* Service worker: la app funciona sin conexión (cache-first del "shell"). */
-const CACHE = 'salud-activa-v1';
-const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'salud-activa-v2';
+const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'figuras.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -24,4 +24,9 @@ self.addEventListener('fetch', e => {
       return res;
     }).catch(() => (req.mode === 'navigate' ? caches.match('index.html') : undefined)))
   );
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then(cs => (cs[0] ? cs[0].focus() : self.clients.openWindow('./'))));
 });

@@ -35,9 +35,9 @@
 
   /* ---------- Estado ---------- */
   const DEFAULTS = () => ({
-    v: 1,
-    settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '' },
-    days: {}, peso: [], presion: [], colesterol: [], dolor: {}
+    v: 2,
+    settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00' },
+    days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}
   });
 
   function load() {
@@ -47,7 +47,7 @@
       if (r && typeof r === 'object') {
         Object.assign(d.settings, r.settings || {});
         ['days', 'dolor'].forEach(k => { if (r[k] && typeof r[k] === 'object' && !Array.isArray(r[k])) d[k] = r[k]; });
-        ['peso', 'presion', 'colesterol'].forEach(k => { if (Array.isArray(r[k])) d[k] = r[k]; });
+        ['peso', 'presion', 'colesterol', 'spo2'].forEach(k => { if (Array.isArray(r[k])) d[k] = r[k]; });
       }
     } catch (e) { /* datos corruptos: se parte de cero */ }
     return d;
@@ -177,6 +177,8 @@
     if (r.sis >= S.settings.pSis || r.dia >= S.settings.pDia) return 'alta';
     return 'ok';
   }
+  const spo2Nivel = r => (r.spo2 < S.settings.spo2Min ? 'baja' : 'ok');
+  const spo2Msg = 'Saturación por debajo del umbral que fijaste. Repetí la medición con la mano tibia, quieta y sin esmalte. Si se repite, o tenés falta de aire, labios azulados o confusión, buscá atención médica.';
   const presionMsg = {
     crisis: 'Presión muy alta. Sentate, descansá unos minutos y volvé a medirla. Si sigue así, o tenés dolor de cabeza intenso, dolor de pecho, falta de aire o mareo, buscá atención médica de urgencia.',
     alta: 'Presión por encima del umbral que fijaste. Repetí la medición con calma y comentalo con tu médico si se repite.'
@@ -198,7 +200,7 @@
   function rutinaItem(it) {
     const c = peek().rutina[it.id] || 0, done = c >= it.meta, dol = S.dolor[it.id];
     return `<div class="item ${done ? 'done' : ''} ${dol ? 'pain' : ''}">
-      <div class="item-main"><b>${esc(it.n)}</b><small>${esc(it.tip)}</small>${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo o hacelo más suave, y consultalo con tu kinesiólogo.</small>' : ''}</div>
+      <div class="item-main"><b>${esc(it.n)}</b>${window.FIG ? window.FIG(it.id) : ''}<small>${esc(it.tip)}</small>${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo o hacelo más suave, y consultalo con tu kinesiólogo.</small>' : ''}</div>
       <div class="stepper"><button data-a="r-" data-id="${it.id}" aria-label="Una menos">−</button><span>${c}/${it.meta}</span><button data-a="r+" data-id="${it.id}" aria-label="Una más">+</button></div>
       <div class="item-actions"><button class="ghost mini" data-a="rok" data-id="${it.id}">${done ? 'Deshacer' : 'Marcar hecho'}</button><button class="ghost mini" data-a="dolor" data-id="${it.id}">${dol ? 'Quitar marca' : 'Me dolió'}</button></div>
     </div>`;
@@ -215,6 +217,8 @@
       const n = presionNivel(ult);
       aviso += `<div class="card ${n === 'crisis' ? 'bad' : 'warn'}"><b>Presión de hoy: ${ult.sis}/${ult.dia}</b><p>${presionMsg[n]}</p></div>`;
     }
+    const us = S.spo2.slice().sort((a, b) => b.ts - a.ts)[0];
+    if (us && ymd(new Date(us.ts)) === hoy() && spo2Nivel(us) !== 'ok') aviso += `<div class="card warn"><b>Saturación de hoy: ${us.spo2}%</b><p>${spo2Msg}</p></div>`;
     return `<h2>${DIAS[now.getDay()]} ${now.getDate()} de ${MESES[now.getMonth()]}</h2>${aviso}
     <div class="card"><h3>Resumen del día</h3>
       ${meter('Pasos', d.pasos, s.metaPasos)}
@@ -257,7 +261,7 @@
     const dosis = it.seg ? `${it.series} × ${it.seg} s${it.lado ? ' por lado' : ''}` : `${it.series} × ${it.reps}${it.lado ? ' por lado' : ''}`;
     const chips = Array.from({ length: it.series }, (_, i) => `<span class="chip ${i < c ? 'on' : ''}"></span>`).join('');
     return `<div class="item ${c >= it.series ? 'done' : ''} ${dol ? 'pain' : ''}">
-      <div class="item-main"><b>${esc(it.n)}</b><small>${dosis} — ${esc(it.tip)}</small>${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo y consultalo con tu kinesiólogo.</small>' : ''}</div>
+      <div class="item-main"><b>${esc(it.n)}</b>${window.FIG ? window.FIG(it.id) : ''}<small>${dosis} — ${esc(it.tip)}</small>${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo y consultalo con tu kinesiólogo.</small>' : ''}</div>
       <div class="chips">${chips}</div>
       <div class="item-actions">
         <button class="pri mini" data-a="serie" data-id="${it.id}">Serie hecha</button>
@@ -282,9 +286,9 @@
   }
 
   function viewSalud() {
-    const tabs = [['presion', 'Presión'], ['peso', 'Peso'], ['colesterol', 'Colesterol'], ['agua', 'Agua']];
+    const tabs = [['presion', 'Presión'], ['peso', 'Peso'], ['colesterol', 'Colesterol'], ['spo2', 'Saturación'], ['agua', 'Agua']];
     const seg = `<div class="seg">${tabs.map(([k, n]) => `<button data-a="sub" data-v="${k}" class="${sub === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
-    return `<h2>Salud</h2>${seg}${({ presion: subPresion, peso: subPeso, colesterol: subColesterol, agua: subAgua })[sub]()}`;
+    return `<h2>Salud</h2>${seg}${({ presion: subPresion, peso: subPeso, colesterol: subColesterol, spo2: subSpo2, agua: subAgua })[sub]()}`;
   }
 
   const delBtn = (k, i) => `<button data-a="del" data-k="${k}" data-i="${i}" aria-label="Borrar registro">🗑</button>`;
@@ -331,6 +335,19 @@
       <ul class="list">${rows.slice(0, 8).map(r => `<li><span>${fmtFecha(r.fecha)} · ${dato(r)}</span>${delBtn('colesterol', r.i)}</li>`).join('')}</ul></div>`;
   }
 
+  function subSpo2() {
+    const rows = S.spo2.map((r, i) => ({ ...r, i })).sort((a, b) => b.ts - a.ts);
+    const aviso = rows[0] && spo2Nivel(rows[0]) !== 'ok' ? `<div class="card warn"><b>Última medición: ${rows[0].spo2}%</b><p>${spo2Msg}</p></div>` : '';
+    return `${aviso}<div class="card"><h3>Registrar saturación (saturómetro)</h3>
+      <form data-f="spo2"><div class="grid2">
+        <div><label for="oSat">Saturación (%)</label><input id="oSat" name="spo2" type="number" inputmode="numeric" min="50" max="100" required></div>
+        <div><label for="oPul">Pulso</label><input id="oPul" name="pul" type="number" inputmode="numeric"></div>
+      </div><div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar</button></div></form>
+      <small>Medí sentado, en reposo, con la mano tibia y quieta. Umbral de aviso: ${S.settings.spo2Min}%. Pedile a tu médico cuál usar y cambialo en Ajustes.</small></div>
+    <div class="card"><h3>Evolución</h3>${chart([{ name: 'Saturación', pts: rows.slice(0, 30).map(r => ({ t: r.ts, v: r.spo2 })) }], { band: [S.settings.spo2Min, 100], label: 'Saturación de oxígeno' })}
+      <ul class="list">${rows.slice(0, 8).map(r => `<li><span>${fmtTs(r.ts)} · <b>${r.spo2}%</b>${r.pul ? ' · ' + r.pul + ' lpm' : ''} <span class="tag ${spo2Nivel(r)}">${spo2Nivel(r) === 'ok' ? 'normal' : 'baja'}</span></span>${delBtn('spo2', r.i)}</li>`).join('')}</ul></div>`;
+  }
+
   function subAgua() {
     const d = peek(), s = S.settings, now = new Date();
     let max = s.metaAgua, cols = '';
@@ -357,6 +374,10 @@
       <h3 style="margin-top:14px">Recordatorio de agua</h3>
       <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recAgua" ${s.recAgua ? 'checked' : ''}>Avisar cada cierto tiempo (solo con la app abierta)</label>
       ${f('recMin', 'Cada cuántos minutos', s.recMin, 'min="15"')}
+      <h3 style="margin-top:14px">Saturación (saturómetro)</h3><small>Consultá con tu médico qué valor usar como umbral.</small>
+      <div class="grid2">${f('spo2Min', 'Umbral de aviso (%)', s.spo2Min)}</div>
+      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recSpo2" ${s.recSpo2 ? 'checked' : ''}>Recordarme medirla (solo con la app abierta)</label>
+      <label for="s_horasSpo2">Horarios (HH:MM separados por coma)</label><input id="s_horasSpo2" name="horasSpo2" type="text" value="${esc(s.horasSpo2)}" placeholder="09:00, 21:00" style="min-height:44px">
       <label for="s_notas">Indicaciones de mi médico / kinesiólogo</label><textarea id="s_notas" name="notas" maxlength="1000" placeholder="Ej: evitar flexión de columna con carga; caminar 30 min diarios">${esc(s.notas)}</textarea>
       <div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar ajustes</button></div></form>
     <div class="card"><h3>Datos</h3>
@@ -410,6 +431,7 @@
       <p>Peso objetivo: ${s.pesoObj} kg (±${s.pesoTol}). Meta diaria: ${s.metaPasos} pasos, ${s.metaAgua} ml de agua.</p>
       ${s.notas.trim() ? `<h3>Indicaciones médicas anotadas</h3><p>${esc(s.notas).replace(/\n/g, '<br>')}</p>` : ''}
       <h3>Presión arterial</h3>${tabla(['Fecha', 'Máx/Mín', 'Pulso'], pr.map(r => [fmtTs(r.ts), `${r.sis}/${r.dia}`, r.pul || '-']))}
+      <h3>Saturación de oxígeno</h3>${tabla(['Fecha', 'SpO2 %', 'Pulso'], S.spo2.slice().sort((a, b) => b.ts - a.ts).slice(0, 20).map(r => [fmtTs(r.ts), r.spo2, r.pul || '-']))}
       <h3>Peso</h3>${tabla(['Fecha', 'kg'], pe.map(r => [fmtFecha(r.fecha), r.kg]))}
       <h3>Colesterol (mg/dl)</h3>${tabla(['Fecha', 'Total', 'LDL', 'HDL', 'TG'], co.map(r => [fmtFecha(r.fecha), r.total ?? '-', r.ldl ?? '-', r.hdl ?? '-', r.tg ?? '-']))}`;
     document.body.classList.add('printing');
@@ -469,6 +491,12 @@
       if (pul !== null && !(pul >= 30 && pul <= 220)) return toast('Revisá el pulso');
       S.presion.push({ ts: Date.now(), sis: Math.round(sis), dia: Math.round(dia), pul: pul === null ? null : Math.round(pul) });
       changed(); toast('Presión guardada');
+    } else if (kind === 'spo2') {
+      const sat = g('spo2'), pul = opt('pul');
+      if (!(sat >= 50 && sat <= 100)) return toast('Revisá la saturación');
+      if (pul !== null && !(pul >= 30 && pul <= 220)) return toast('Revisá el pulso');
+      S.spo2.push({ ts: Date.now(), spo2: Math.round(sat), pul: pul === null ? null : Math.round(pul) });
+      changed(); toast('Saturación guardada');
     } else if (kind === 'peso') {
       const kg = g('kg'), fecha = String(fd.get('fecha') || '');
       if (!(kg >= 30 && kg <= 300) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return toast('Revisá el peso y la fecha');
@@ -485,28 +513,45 @@
     } else if (kind === 'ajustes') {
       const n = {
         pesoObj: g('pesoObj'), pesoTol: g('pesoTol'), metaPasos: g('metaPasos'), metaAgua: g('metaAgua'), vaso: g('vaso'),
-        umbral: g('umbral'), pSis: g('pSis'), pDia: g('pDia'), recMin: g('recMin')
+        umbral: g('umbral'), pSis: g('pSis'), pDia: g('pDia'), recMin: g('recMin'), spo2Min: g('spo2Min')
       };
       if (Object.values(n).some(v => !(v > 0))) return toast('Revisá los valores: deben ser mayores que cero');
       if (n.recMin < 15) n.recMin = 15;
-      Object.assign(S.settings, n, { recAgua: fd.get('recAgua') === 'on', notas: String(fd.get('notas') || '').slice(0, 1000) });
-      if (S.settings.recAgua && 'Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (er) { /* nada */ } }
+      if (n.spo2Min > 100) return toast('El umbral de saturación no puede pasar de 100');
+      const horas = String(fd.get('horasSpo2') || '').split(',').map(h => h.trim()).filter(Boolean);
+      if (horas.some(h => !/^([01]?\d|2[0-3]):[0-5]\d$/.test(h))) return toast('Horarios con formato HH:MM, ej: 09:00, 21:00');
+      Object.assign(S.settings, n, { recAgua: fd.get('recAgua') === 'on', recSpo2: fd.get('recSpo2') === 'on', horasSpo2: horas.map(h => h.padStart(5, '0')).join(', '), notas: String(fd.get('notas') || '').slice(0, 1000) });
+      if ((S.settings.recAgua || S.settings.recSpo2) && 'Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (er) { /* nada */ } }
       setupReminders(); changed(); toast('Ajustes guardados');
     }
   });
 
-  /* ---------- Recordatorio de agua (solo con la app abierta) ---------- */
-  let recT = null, lastRec = Date.now();
+  /* ---------- Recordatorios (solo con la app abierta) ---------- */
+  function notify(title, body) {
+    toast(title);
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const o = { body, icon: 'icon-192.png', tag: title };
+    const directo = () => { try { new Notification(title, o); } catch (e) { /* nada */ } };
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) navigator.serviceWorker.ready.then(r => r.showNotification(title, o)).catch(directo);
+      else directo();
+    } catch (e) { directo(); }
+  }
+  let recT = null, lastRec = Date.now(), lastSpo2 = '';
   function setupReminders() {
     clearInterval(recT); lastRec = Date.now();
-    if (!S.settings.recAgua) return;
+    if (!S.settings.recAgua && !S.settings.recSpo2) return;
     recT = setInterval(() => {
-      const h = new Date().getHours();
-      if (h < 8 || h >= 22 || Date.now() - lastRec < S.settings.recMin * 60000) return;
-      lastRec = Date.now();
-      toast('💧 Hora de tomar agua');
-      try { if ('Notification' in window && Notification.permission === 'granted') new Notification('💧 Hora de tomar agua', { body: `Vaso de ${S.settings.vaso} ml`, icon: 'icon-192.png' }); } catch (e) { /* nada */ }
-    }, 60000);
+      const n = new Date(), h = n.getHours();
+      if (S.settings.recAgua && h >= 8 && h < 22 && Date.now() - lastRec >= S.settings.recMin * 60000) {
+        lastRec = Date.now(); notify('💧 Hora de tomar agua', `Vaso de ${S.settings.vaso} ml`);
+      }
+      if (S.settings.recSpo2) {
+        const k = `${hoy()} ${pad(h)}:${pad(n.getMinutes())}`;
+        const horas = String(S.settings.horasSpo2 || '').split(',').map(x => x.trim().padStart(5, '0'));
+        if (horas.includes(k.slice(11)) && lastSpo2 !== k) { lastSpo2 = k; notify('🫁 Hora de medir la saturación', 'Sentado, en reposo, con la mano tibia y quieta.'); }
+      }
+    }, 20000);
   }
 
   document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
@@ -517,5 +562,5 @@
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 
   // Ganchos para pruebas automáticas.
-  window.SA = { state: () => S, detectStep, step, presionNivel, go, render, chart };
+  window.SA = { state: () => S, detectStep, step, presionNivel, spo2Nivel, go, render, chart };
 })();

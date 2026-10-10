@@ -7,7 +7,7 @@ Idioma de la interfaz y de los textos: español rioplatense (voseo).
 - **Hoy**: resumen del día (pasos, agua, rutina, espalda) y rutina matutina con contador de repeticiones.
 - **Pasos**: conteo con acelerómetro (`devicemotion`) solo con la app abierta, carga manual y gráfico de 7 días.
 - **Espalda**: módulo de espalda y core (lun/mié/vie) con series, temporizador de descanso y tarjetas de técnica de levantamiento.
-- **Salud**: presión arterial, peso (objetivo 88 kg ± tolerancia), colesterol y agua, cada uno con gráfico SVG.
+- **Salud**: presión arterial, saturación de oxígeno (saturómetro, con umbral y recordatorio configurables), peso (objetivo 88 kg ± tolerancia), colesterol y agua, cada uno con gráfico SVG.
 - **Ajustes**: metas, umbrales de presión, recordatorio de agua, indicaciones del médico, exportar/importar JSON e informe imprimible.
 
 ## Estructura
@@ -15,6 +15,7 @@ Idioma de la interfaz y de los textos: español rioplatense (voseo).
 index.html      shell + navegación inferior
 styles.css      tema claro/oscuro, mobile first
 app.js          toda la lógica (IIFE, sin dependencias)
+figuras.js      ilustraciones SVG de los ejercicios (window.FIG(id)); un ejercicio nuevo necesita su pose aquí
 sw.js           service worker (cache-first, offline)
 manifest.json   instalación como app
 icon.svg, icon-192.png, icon-512.png
@@ -30,9 +31,9 @@ Abrir http://localhost:8080. El service worker y `devicemotion` requieren HTTPS 
 ## Datos
 Todo vive en `localStorage` bajo la clave `saludActivaV1`:
 ```
-{ v, settings, days: { "YYYY-MM-DD": { pasos, agua, rutina:{id:reps}, core:{id:series} } },
+{ v(2), settings, days: { "YYYY-MM-DD": { pasos, agua, rutina:{id:reps}, core:{id:series} } },
   peso: [{fecha, kg}], presion: [{ts, sis, dia, pul}],
-  colesterol: [{fecha, total?, ldl?, hdl?, tg?}], dolor: { idEjercicio: true } }
+  colesterol: [{fecha, total?, ldl?, hdl?, tg?}], spo2: [{ts, spo2, pul}], dolor: { idEjercicio: true } }
 ```
 Si se cambia el formato, mantener `load()` tolerante y subir `v`. Si se cambian los archivos cacheados, subir `CACHE` en `sw.js`.
 

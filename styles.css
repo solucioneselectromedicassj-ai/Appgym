@@ -119,3 +119,16 @@ input[type=checkbox]{width:auto;min-height:0;transform:scale(1.3);margin-right:8
   #informe table{border-collapse:collapse;width:100%;margin:6px 0 14px}
   #informe th,#informe td{border:1px solid #888;padding:4px 6px;text-align:left}
 }
+
+/* ilustraciones de ejercicios */
+.fig{margin:8px 0 4px;text-align:center}
+.fig svg{width:100%;max-width:340px;height:auto;max-height:130px}
+.fig svg *{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.fig .bd{stroke:var(--fg);stroke-width:4}
+.fig .mv{stroke:var(--pri);stroke-width:4.5}
+.fig .ds{stroke-dasharray:1 7;opacity:.6}
+.fig .fl{stroke:var(--line);stroke-width:2}
+.fig .ar{stroke:var(--muted);stroke-width:2.5}
+.figcap{display:flex;justify-content:space-around;gap:8px;font-size:.78rem;color:var(--muted)}
+.figcap span{flex:1}
+.tag.baja{color:var(--warn);border-color:var(--warn)}

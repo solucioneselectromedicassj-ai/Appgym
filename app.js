@@ -2,6 +2,7 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
+  const APP_V = '2.0.2';
   // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
   const CAP = window.Capacitor;
   const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
@@ -42,7 +43,7 @@
   const DEFAULTS = () => ({
     v: 2,
     settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00' },
-    days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}
+    days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}, sensor: null
   });
 
   function load() {
@@ -53,6 +54,7 @@
         Object.assign(d.settings, r.settings || {});
         ['days', 'dolor'].forEach(k => { if (r[k] && typeof r[k] === 'object' && !Array.isArray(r[k])) d[k] = r[k]; });
         ['peso', 'presion', 'colesterol', 'spo2'].forEach(k => { if (Array.isArray(r[k])) d[k] = r[k]; });
+        if (r.sensor && typeof r.sensor === 'object' && Number.isFinite(r.sensor.last)) d.sensor = { last: r.sensor.last, t: r.sensor.t || 0 };
       }
     } catch (e) { /* datos corruptos: se parte de cero */ }
     return d;
@@ -176,10 +178,34 @@
     const b = $('#pasosBar'); if (b) b.style.width = Math.min(100, Math.round(n / meta * 100)) + '%';
   }
 
-  /* ---------- Pasos automáticos (Health Connect, solo app Android) ---------- */
-  const health = { on: false, msg: NATIVE ? 'Todavía no conectaste Health Connect.' : '', last: 0 };
-  const refreshPasos = () => { if (tab === 'pasos' || tab === 'hoy') render(); };
   const conTiempo = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('tiempo agotado')), ms))]);
+  /* ---------- Pasos automáticos: sensor del teléfono (solo app Android) ---------- */
+  // El hardware suma los pasos todo el día, con la app cerrada. Al abrirla se suma la diferencia desde la última lectura.
+  const sensor = { on: false, msg: NATIVE ? 'Tocá "Activar contador de pasos" para empezar.' : '', last: 0 };
+  async function syncSensor(pedir) {
+    const P = plug('StepCounter');
+    if (!P) { sensor.msg = 'Esta versión de la app no tiene el contador de pasos.'; return refreshPasos(); }
+    try {
+      if (!(await conTiempo(P.isAvailable(), 10000)).available) { sensor.on = false; sensor.msg = 'Este teléfono no tiene sensor contador de pasos. Usá Health Connect o cargalos a mano.'; return refreshPasos(); }
+      let g = (await conTiempo(P.hasPermission(), 10000)).granted;
+      if (!g && pedir) { sensor.msg = 'Pidiendo permiso de actividad física…'; refreshPasos(); g = (await conTiempo(P.ensurePermission(), 120000)).granted; }
+      if (!g) { sensor.on = false; sensor.msg = pedir ? 'No diste el permiso. Activalo en Ajustes del teléfono → Apps → Salud Activa → Permisos → Actividad física.' : 'Tocá "Activar contador de pasos" para empezar.'; return refreshPasos(); }
+      const r = await conTiempo(P.read(), 15000), v = Math.round(r.counter);
+      let delta = 0;
+      if (!S.sensor) { const m0 = new Date(); m0.setHours(0, 0, 0, 0); delta = r.bootTime >= m0.getTime() - 60000 ? v : 0; } // si el teléfono se encendió hoy, todo lo contado es de hoy
+      else delta = v >= S.sensor.last ? v - S.sensor.last : v; // si bajó, el teléfono se reinició
+      S.sensor = { last: v, t: Date.now() };
+      if (delta > 0 && delta < 60000) day().pasos += delta;
+      sensor.on = true; sensor.last = Date.now(); sensor.msg = '';
+      save(); refreshPasos();
+    } catch (e) {
+      sensor.on = false; sensor.msg = `No se pudo leer el contador de pasos (${esc((e && (e.message || e)) || 'error')}).`; refreshPasos();
+    }
+  }
+
+  /* ---------- Pasos desde Health Connect (opcional, solo app Android) ---------- */
+  const health = { on: false, msg: NATIVE ? 'Todavía no importaste desde Health Connect.' : '', last: 0 };
+  const refreshPasos = () => { if (tab === 'pasos' || tab === 'hoy') render(); };
   // El plugin devuelve { permissions: { READ_STEPS: true } } (objeto); se acepta también una lista de objetos.
   const pasosOk = r => { const p = r && r.permissions; return Array.isArray(p) ? p.some(x => x && x.READ_STEPS) : !!(p && p.READ_STEPS); };
   let sincronizando = false;
@@ -201,7 +227,7 @@
       if (!pasosOk(r) && pedir) r = await conTiempo(H.requestHealthPermissions(q), 120000);
       if (!pasosOk(r)) {
         health.on = false;
-        health.msg = pedir ? 'No diste el permiso. Podés darlo en Health Connect → Permisos de aplicaciones → Salud Activa.' : 'Todavía no conectaste Health Connect.';
+        health.msg = pedir ? 'No diste el permiso. Podés darlo en Health Connect → Permisos de aplicaciones → Salud Activa.' : 'Todavía no importaste desde Health Connect.';
         return refreshPasos();
       }
       const fin = new Date(), ini = new Date(fin.getFullYear(), fin.getMonth(), fin.getDate() - 6);
@@ -295,9 +321,13 @@
       <small>${step.on ? 'Contando con el acelerómetro. Dejá la pantalla encendida y el teléfono en el bolsillo.' : 'El navegador solo cuenta mientras la app está abierta y la pantalla encendida.'}</small>`}
     </div>
     ${NATIVE ? `<div class="card"><h3>Pasos automáticos</h3>
-      <p>${health.on ? `Conectado a Health Connect. Última lectura: ${pad(new Date(health.last).getHours())}:${pad(new Date(health.last).getMinutes())}.` : esc(health.msg)}</p>
-      <div class="row"><button class="${health.on ? 'ghost' : 'pri'} grow" data-a="health-sync">${health.on ? 'Sincronizar ahora' : 'Conectar Health Connect'}</button></div>
-      <small>Tu teléfono registra los pasos todo el día (Google Fit, Salud de Samsung, etc.) y esta app los lee de Health Connect cada vez que la abrís.</small></div>` : ''}
+      <p>${sensor.on ? `Contando con el sensor de pasos del teléfono. Última lectura: ${pad(new Date(sensor.last).getHours())}:${pad(new Date(sensor.last).getMinutes())}.` : esc(sensor.msg)}</p>
+      <div class="row"><button class="${sensor.on ? 'ghost' : 'pri'} grow" data-a="sensor-sync">${sensor.on ? 'Actualizar ahora' : 'Activar contador de pasos'}</button></div>
+      <small>El teléfono cuenta los pasos todo el día, aunque la app esté cerrada; la app los suma cada vez que la abrís.</small></div>
+    <div class="card"><h3>Health Connect (opcional)</h3>
+      <p>${health.on ? `Conectado. Última lectura: ${pad(new Date(health.last).getHours())}:${pad(new Date(health.last).getMinutes())}.` : esc(health.msg)}</p>
+      <div class="row"><button class="ghost grow" data-a="health-sync">${health.on ? 'Importar de nuevo' : 'Importar de Health Connect'}</button></div>
+      <small>Trae el total del día desde Google Fit, Salud de Samsung, etc. Si los dos suman, se queda con el mayor.</small></div>` : ''}
     <div class="card"><h3>Cargar pasos a mano</h3>
       <small>Si no usás Health Connect, copiá el total de Google Fit, Salud o tu pulsera.</small>
       <label for="pasosInput">Cantidad</label><input id="pasosInput" type="number" inputmode="numeric" min="0" max="100000" placeholder="Ej: 3500">
@@ -435,7 +465,8 @@
       <div class="row"><button class="ghost grow" data-a="informe">Informe para el médico</button><button class="ghost grow" data-a="export">Exportar copia</button></div>
       <div class="row" style="margin-top:8px"><button class="ghost grow" data-a="import">Importar copia</button><button class="dang grow" data-a="borrar">Borrar todo</button></div>
       <input id="fileIn" type="file" accept="application/json,.json" hidden>
-    </div>`;
+    </div>
+    <p class="foot">Salud Activa v${APP_V}${NATIVE ? ' (Android)' : ''}</p>`;
   }
 
   function render() {
@@ -509,6 +540,7 @@
       case 'agua-': addAgua(-1); break;
       case 'motion': toggleMotion(); break;
       case 'health-sync': syncPasos(true); break;
+      case 'sensor-sync': syncSensor(true); break;
       case 'pasos-add': case 'pasos-set': {
         const n = Math.round(num($('#pasosInput').value));
         if (!(n >= 0) || n > 100000) { toast('Ingresá una cantidad válida'); break; }
@@ -633,12 +665,12 @@
     }, 20000);
   }
 
-  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); else if (NATIVE) syncPasos(false); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); else if (NATIVE) syncSensor(false); });
   window.addEventListener('pagehide', save);
 
   render();
   setupReminders();
-  if (NATIVE) { syncPasos(false); setInterval(() => syncPasos(false), 5 * 60000); }
+  if (NATIVE) { syncSensor(false); setInterval(() => syncSensor(false), 5 * 60000); }
   else if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 
   // Ganchos para pruebas automáticas.

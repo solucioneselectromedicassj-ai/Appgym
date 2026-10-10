@@ -64,6 +64,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-feature android:name="android.hardware.sensor.stepcounter" android:required="false" />
     <!-- Solo se lee la cantidad de pasos; es el único dato de salud que la app pide a Health Connect. -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />
 </manifest>

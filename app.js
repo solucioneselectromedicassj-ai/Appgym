@@ -2,12 +2,20 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
-  const APP_V = '2.0.2';
+  const APP_V = '2.0.3';
   // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
   const CAP = window.Capacitor;
   const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
   const plugins = {};
-  const plug = name => (NATIVE && CAP.registerPlugin ? (plugins[name] = plugins[name] || CAP.registerPlugin(name)) : null);
+  // En la app Android el puente nativo expone los plugins en Capacitor.Plugins (no hay bundler que traiga registerPlugin).
+  const plug = name => {
+    if (!NATIVE) return null;
+    try {
+      if (CAP.Plugins && CAP.Plugins[name]) return CAP.Plugins[name];
+      if (CAP.registerPlugin) return (plugins[name] = plugins[name] || CAP.registerPlugin(name));
+    } catch (e) { /* sin plugin */ }
+    return null;
+  };
   const $ = (s, r = document) => r.querySelector(s);
   const pad = n => String(n).padStart(2, '0');
   const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

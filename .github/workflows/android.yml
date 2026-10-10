@@ -18,7 +18,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      - name: Aceptar licencias del SDK de Android (ya viene instalado en el runner)
+        run: yes | "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager --licenses > /dev/null || true
       - name: Instalar dependencias y copiar la web
         run: |
           npm ci

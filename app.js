@@ -2,7 +2,7 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
-  const APP_V = '2.1.0';
+  const APP_V = '2.2.0';
   // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
   const CAP = window.Capacitor;
   const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
@@ -24,7 +24,7 @@
   const num = v => { const n = parseFloat(String(v).replace(',', '.')); return Number.isFinite(n) ? n : NaN; };
   const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
   const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-  const DIAS_CORE = [1, 3, 5]; // lunes, miércoles y viernes
+  const DIA_L = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
   const tsFecha = f => new Date(f + 'T12:00:00').getTime();
   const fmtFecha = f => { const [y, m, d] = f.split('-'); return `${d}/${m}/${y}`; };
   const fmtTs = t => { const d = new Date(t); return `${d.getDate()}/${d.getMonth() + 1} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -50,8 +50,9 @@
   /* ---------- Estado ---------- */
   const DEFAULTS = () => ({
     v: 2,
-    settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00', segundoPlano: true },
-    days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}, sensor: null
+    settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00', segundoPlano: true,
+      agRutOn: true, agRutDias: [0, 1, 2, 3, 4, 5, 6], agRutHora: '08:00', agCoreOn: true, agCoreDias: [1, 3, 5], agCoreHora: '18:00', seguirOn: true, seguirHora: '21:00', agDesde: '' },
+    days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}, sensor: null, plan: {}, cerrados: {}, recup: {}
   });
 
   function load() {
@@ -60,11 +61,13 @@
       const r = JSON.parse(localStorage.getItem(KEY) || 'null');
       if (r && typeof r === 'object') {
         Object.assign(d.settings, r.settings || {});
-        ['days', 'dolor'].forEach(k => { if (r[k] && typeof r[k] === 'object' && !Array.isArray(r[k])) d[k] = r[k]; });
+        ['days', 'dolor', 'plan', 'cerrados', 'recup'].forEach(k => { if (r[k] && typeof r[k] === 'object' && !Array.isArray(r[k])) d[k] = r[k]; });
         ['peso', 'presion', 'colesterol', 'spo2'].forEach(k => { if (Array.isArray(r[k])) d[k] = r[k]; });
         if (r.sensor && typeof r.sensor === 'object' && Number.isFinite(r.sensor.last)) d.sensor = { last: r.sensor.last, t: r.sensor.t || 0 };
       }
     } catch (e) { /* datos corruptos: se parte de cero */ }
+    if (!d.settings.agDesde) d.settings.agDesde = ymd(new Date());
+    ['agRutDias', 'agCoreDias'].forEach(k => { if (!Array.isArray(d.settings[k])) d.settings[k] = DEFAULTS().settings[k]; });
     return d;
   }
   let S = load();
@@ -77,6 +80,37 @@
     const x = S.days[d] || (S.days[d] = { pasos: 0, agua: 0, rutina: {}, core: {} });
     x.rutina = x.rutina || {}; x.core = x.core || {};
     return x;
+  };
+
+  /* ---------- Agenda y metas de ejercicios ---------- */
+  const planDe = id => S.plan[id] || {};
+  const metaR = it => planDe(it.id).meta || it.meta;
+  const seriesC = it => planDe(it.id).series || it.series;
+  const repsC = it => planDe(it.id).reps || it.reps;
+  const segC = it => planDe(it.id).seg || it.seg;
+  const tocaCore = f => S.settings.agCoreOn && S.settings.agCoreDias.includes(f.getDay());
+  const fmtDias = ds => [1, 2, 3, 4, 5, 6, 0].filter(n => ds.includes(n)).map(n => DIAS[n].slice(0, 3)).join(', ');
+  const extraCore = it => (tocaCore(new Date()) ? Math.min(1, S.recup[it.id] || 0) : 0); // serie de recuperación opcional
+  const metaCore = it => seriesC(it) + extraCore(it);
+  function proximaSesion() {
+    const n = new Date();
+    for (let i = 1; i <= 7; i++) { const x = new Date(n.getFullYear(), n.getMonth(), n.getDate() + i); if (tocaCore(x)) return `${DIAS[x.getDay()]} ${S.settings.agCoreHora}`; }
+    return '';
+  }
+  // Sesiones de espalda de los últimos 7 días que quedaron incompletas y no se resolvieron.
+  function pendientes() {
+    const n = new Date(), out = [];
+    for (let i = 1; i <= 7; i++) {
+      const x = new Date(n.getFullYear(), n.getMonth(), n.getDate() - i), k = ymd(x);
+      if (!tocaCore(x) || S.cerrados[k] || k < S.settings.agDesde) continue;
+      const dd = peek(k), falta = CORE.map(it => ({ it, n: Math.max(0, seriesC(it) - (dd.core[it.id] || 0)) })).filter(q => q.n > 0);
+      if (falta.length) out.push({ k, x, falta, total: falta.reduce((a, q) => a + q.n, 0) });
+    }
+    return out;
+  }
+  const pedirNumero = (msg, actual, max = 999) => {
+    const r = window.prompt(msg, String(actual)); if (r === null) return null;
+    const v = Math.round(num(r)); return v >= 0 && v <= max ? v : (toast('Número no válido'), null);
   };
 
   /* ---------- Utilidades de UI ---------- */
@@ -295,19 +329,20 @@
   const views = { hoy: viewHoy, pasos: viewPasos, espalda: viewEspalda, salud: viewSalud, ajustes: viewAjustes };
 
   function rutinaItem(it) {
-    const c = peek().rutina[it.id] || 0, done = c >= it.meta, dol = S.dolor[it.id];
+    const c = peek().rutina[it.id] || 0, meta = metaR(it), done = c >= meta, dol = S.dolor[it.id];
     return `<div class="item ${done ? 'done' : ''} ${dol ? 'pain' : ''}">
       <div class="item-main"><b>${esc(it.n)}</b>${window.FIG ? window.FIG(it.id) : ''}<small>${esc(it.tip)}</small>${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo o hacelo más suave, y consultalo con tu kinesiólogo.</small>' : ''}</div>
-      <div class="stepper"><button data-a="r-" data-id="${it.id}" aria-label="Una menos">−</button><span>${c}/${it.meta}</span><button data-a="r+" data-id="${it.id}" aria-label="Una más">+</button></div>
-      <div class="item-actions"><button class="ghost mini" data-a="rok" data-id="${it.id}">${done ? 'Deshacer' : 'Marcar hecho'}</button><button class="ghost mini" data-a="dolor" data-id="${it.id}">${dol ? 'Quitar marca' : 'Me dolió'}</button></div>
+      <div class="stepper"><button data-a="r-" data-id="${it.id}" aria-label="Una menos">−</button><button class="cnt" data-a="r-set" data-id="${it.id}" aria-label="Escribir cuántas hiciste">${c}/${meta}</button><button data-a="r+" data-id="${it.id}" aria-label="Una más">+</button><button class="ghost mini" data-a="r+5" data-id="${it.id}">+5</button></div>
+      <small>Tocá el número para escribir cuántas hiciste. Podés pasarte de la meta.</small>
+      <div class="item-actions"><button class="ghost mini" data-a="rok" data-id="${it.id}">${done ? 'Deshacer' : 'Marcar meta hecha'}</button><button class="ghost mini" data-a="meta-r" data-id="${it.id}">Cambiar meta</button><button class="ghost mini" data-a="dolor" data-id="${it.id}">${dol ? 'Quitar marca' : 'Me dolió'}</button></div>
     </div>`;
   }
 
   function viewHoy() {
     const d = peek(), s = S.settings, now = new Date();
-    const hechos = RUTINA.filter(i => (d.rutina[i.id] || 0) >= i.meta).length;
-    const toca = DIAS_CORE.includes(now.getDay());
-    const coreHechos = CORE.filter(i => (d.core[i.id] || 0) >= i.series).length;
+    const hechos = RUTINA.filter(i => (d.rutina[i.id] || 0) >= metaR(i)).length;
+    const toca = tocaCore(now);
+    const coreHechos = CORE.filter(i => (d.core[i.id] || 0) >= metaCore(i)).length;
     const ult = S.presion.slice().sort((a, b) => b.ts - a.ts)[0];
     let aviso = pesoAviso();
     if (ult && ymd(new Date(ult.ts)) === hoy() && presionNivel(ult) !== 'ok') {
@@ -316,12 +351,14 @@
     }
     const us = S.spo2.slice().sort((a, b) => b.ts - a.ts)[0];
     if (us && ymd(new Date(us.ts)) === hoy() && spo2Nivel(us) !== 'ok') aviso += `<div class="card warn"><b>Saturación de hoy: ${us.spo2}%</b><p>${spo2Msg}</p></div>`;
+    const pend = pendientes();
+    if (pend.length) aviso += `<div class="card warn"><b>Espalda: tenés ${pend.length === 1 ? 'una sesión pendiente' : pend.length + ' sesiones pendientes'}</b><p>Podés repartirlo en las próximas sesiones o dejarlo así.</p><div class="row"><button class="ghost" data-a="tab" data-t="espalda">Ver pendientes</button></div></div>`;
     return `<h2>${DIAS[now.getDay()]} ${now.getDate()} de ${MESES[now.getMonth()]}</h2>${aviso}
     <div class="card"><h3>Resumen del día</h3>
       ${meter('Pasos', d.pasos, s.metaPasos)}
       ${meter('Agua', d.agua, s.metaAgua, 'ml')}
       ${meter('Rutina de la mañana', hechos, RUTINA.length)}
-      ${toca ? meter('Espalda y core', coreHechos, CORE.length) : '<small>Espalda y core: hoy descansás (lun, mié y vie).</small>'}
+      ${toca ? meter('Espalda y core', coreHechos, CORE.length) : `<small>Espalda y core: hoy descansás${proximaSesion() ? '. Próxima: ' + proximaSesion() : ''}.</small>`}
     </div>
     <div class="card"><h3>Agua</h3>
       <div class="row"><button class="ghost grow" data-a="agua-">− ${s.vaso} ml</button><button class="pri grow" data-a="agua+">+ vaso (${s.vaso} ml)</button></div>
@@ -363,25 +400,36 @@
   }
 
   function coreItem(it) {
-    const c = peek().core[it.id] || 0, dol = S.dolor[it.id];
-    const dosis = it.seg ? `${it.series} × ${it.seg} s${it.lado ? ' por lado' : ''}` : `${it.series} × ${it.reps}${it.lado ? ' por lado' : ''}`;
-    const chips = Array.from({ length: it.series }, (_, i) => `<span class="chip ${i < c ? 'on' : ''}"></span>`).join('');
-    return `<div class="item ${c >= it.series ? 'done' : ''} ${dol ? 'pain' : ''}">
-      <div class="item-main"><b>${esc(it.n)}</b>${window.FIG ? window.FIG(it.id) : ''}<small>${dosis} — ${esc(it.tip)}</small>${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo y consultalo con tu kinesiólogo.</small>' : ''}</div>
-      <div class="chips">${chips}</div>
+    const c = peek().core[it.id] || 0, dol = S.dolor[it.id], ser = seriesC(it), ext = extraCore(it), meta = ser + ext;
+    const dosis = segC(it) ? `${ser} × ${segC(it)} s${it.lado ? ' por lado' : ''}` : `${ser} × ${repsC(it)}${it.lado ? ' por lado' : ''}`;
+    const chips = Array.from({ length: Math.max(meta, c) }, (_, i) => `<span class="chip ${i < c ? 'on' : ''} ${i >= ser ? 'extra' : ''}"></span>`).join('');
+    return `<div class="item ${c >= meta ? 'done' : ''} ${dol ? 'pain' : ''}">
+      <div class="item-main"><b>${esc(it.n)}</b>${window.FIG ? window.FIG(it.id) : ''}<small>${dosis} — ${esc(it.tip)}</small>${ext ? '<small>➕ 1 serie extra de recuperación (opcional, hacela solo si te sentís bien).</small>' : ''}${dol ? '<small class="warnTxt">⚠ Marcado como doloroso: salteálo y consultalo con tu kinesiólogo.</small>' : ''}</div>
+      <div class="chips">${chips}<small style="align-self:center;margin-left:6px">${c} serie${c === 1 ? '' : 's'} hecha${c === 1 ? '' : 's'}</small></div>
       <div class="item-actions">
         <button class="pri mini" data-a="serie" data-id="${it.id}">Serie hecha</button>
         <button class="ghost mini" data-a="serie-" data-id="${it.id}">−</button>
-        ${it.seg ? `<button class="ghost mini" data-a="timer" data-s="${it.seg}" data-l="${esc(it.n)}">⏱ ${it.seg} s</button>` : ''}
+        ${segC(it) ? `<button class="ghost mini" data-a="timer" data-s="${segC(it)}" data-l="${esc(it.n)}">⏱ ${segC(it)} s</button>` : ''}
+        <button class="ghost mini" data-a="meta-c" data-id="${it.id}">Cambiar meta</button>
         <button class="ghost mini" data-a="dolor" data-id="${it.id}">${dol ? 'Quitar marca' : 'Me dolió'}</button>
       </div></div>`;
   }
 
   function viewEspalda() {
-    const toca = DIAS_CORE.includes(new Date().getDay());
-    const notas = S.settings.notas.trim();
+    const now = new Date(), toca = tocaCore(now), st = S.settings, dd = peek(), notas = st.notas.trim();
+    const hechos = CORE.filter(i => (dd.core[i.id] || 0) >= metaCore(i)).length;
+    const pend = pendientes();
+    const agenda = st.agCoreOn ? `Agenda: ${fmtDias(st.agCoreDias)} a las ${st.agCoreHora}. ` : 'Sin agenda: activala en Ajustes. ';
+    const estado = dd.omitido ? '<p class="warnTxt">Marcaste que hoy no pudiste. Mañana te lo recuerdo de nuevo.</p>' : (toca ? `<p>Hoy: ${hechos} de ${CORE.length} ejercicios completos.</p>` : '');
+    const botones = toca ? `<div class="row"><button class="pri grow" data-a="core-todo">✅ Lo hice todo</button><button class="ghost grow" data-a="core-no">❌ No pude hoy</button></div>` : '';
+    const cardPend = pend.length ? `<div class="card warn"><h3>Pendientes de días anteriores</h3>
+      <ul class="list">${pend.map(q => `<li><span>${DIAS[q.x.getDay()]} ${q.x.getDate()}/${q.x.getMonth() + 1}: faltaron <b>${q.total}</b> serie${q.total === 1 ? '' : 's'} (${q.falta.map(f => esc(f.it.n.split(' (')[0])).join(', ')})</span></li>`).join('')}</ul>
+      <p>Podés repartirlo en las próximas sesiones (como máximo 1 serie extra por ejercicio, opcional) o dejarlo así y seguir con lo que puedas.</p>
+      <div class="row"><button class="pri grow" data-a="pend-repartir">Repartir en las próximas</button><button class="ghost grow" data-a="pend-dejar">Dejarlo así</button></div>
+      <small>Si te duele o algo no te cae bien, no recuperes: cortá y consultá.</small></div>` : '';
     return `<h2>Espalda y core</h2>
-    <div class="card ${toca ? 'ok' : ''}"><b>${toca ? 'Hoy toca' : 'Hoy descansás'}</b><p>Módulo de 10 a 15 minutos, 3 veces por semana (lunes, miércoles y viernes). Pocas repeticiones, ritmo lento y pausas de 45 s entre series.</p></div>
+    <div class="card ${toca ? 'ok' : ''}"><b>${toca ? 'Hoy toca' : 'Hoy descansás'}</b><p>${agenda}${!toca && proximaSesion() ? 'Próxima: ' + proximaSesion() + '. ' : ''}Módulo de 10 a 15 minutos. Pocas repeticiones, ritmo lento y pausas de 45 s entre series.</p>${estado}${botones}</div>
+    ${cardPend}
     <div class="card warn"><b>Cortá el ejercicio y consultá si aparece:</b><p>dolor que baja a la pierna, hormigueo, adormecimiento o pérdida de fuerza. Que un kinesiólogo valide esta lista una vez por tu lesión de espalda.</p></div>
     ${notas ? `<div class="card"><h3>Indicaciones de mi médico</h3><p>${esc(notas).replace(/\n/g, '<br>')}</p></div>` : ''}
     ${CORE.map(coreItem).join('')}
@@ -467,6 +515,7 @@
     <div class="card"><h3>Últimos 7 días (ml)</h3><div class="week">${cols}</div></div>`;
   }
 
+  const diaChips = (name, sel) => [1, 2, 3, 4, 5, 6, 0].map(n => `<label><input type="checkbox" name="${name}" value="${n}" ${sel.includes(n) ? 'checked' : ''}>${DIA_L[n]}</label>`).join('');
   function viewAjustes() {
     const s = S.settings;
     const f = (n, l, v, extra = '') => `<div><label for="s_${n}">${l}</label><input id="s_${n}" name="${n}" type="number" inputmode="decimal" step="any" value="${v}" ${extra} required></div>`;
@@ -477,6 +526,16 @@
       <select id="s_umbral" name="umbral">${[[0.9, 'Alta (detecta pasos suaves)'], [1.3, 'Normal'], [1.8, 'Baja (evita falsos pasos)']].map(([v, n]) => `<option value="${v}" ${s.umbral === v ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <h3 style="margin-top:14px">Presión: umbral de aviso</h3><small>Consultá con tu médico qué valores usar.</small>
       <div class="grid2">${f('pSis', 'Máxima (sistólica)', s.pSis)}${f('pDia', 'Mínima (diastólica)', s.pDia)}</div>
+      <h3 style="margin-top:14px">Agenda de ejercicios</h3>
+      <small>${NATIVE ? 'Te avisa con notificaciones aunque la app esté cerrada.' : 'Los avisos de agenda funcionan en la app Android.'}</small>
+      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="agRutOn" ${s.agRutOn ? 'checked' : ''}>Rutina de la mañana</label>
+      <div class="dias">${diaChips('agRutDias', s.agRutDias)}</div>
+      <label for="s_agRutHora">Hora</label><input id="s_agRutHora" name="agRutHora" type="time" value="${esc(s.agRutHora)}">
+      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="agCoreOn" ${s.agCoreOn ? 'checked' : ''}>Espalda y core</label>
+      <div class="dias">${diaChips('agCoreDias', s.agCoreDias)}</div>
+      <label for="s_agCoreHora">Hora</label><input id="s_agCoreHora" name="agCoreHora" type="time" value="${esc(s.agCoreHora)}">
+      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="seguirOn" ${s.seguirOn ? 'checked' : ''}>Preguntarme a la noche si hice la espalda (y recordarlo al otro día)</label>
+      <label for="s_seguirHora">Hora de la pregunta</label><input id="s_seguirHora" name="seguirHora" type="time" value="${esc(s.seguirHora)}">
       <h3 style="margin-top:14px">Recordatorio de agua</h3>
       <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recAgua" ${s.recAgua ? 'checked' : ''}>Avisar cada cierto tiempo${NATIVE ? '' : ' (solo con la app abierta)'}</label>
       ${f('recMin', 'Cada cuántos minutos', s.recMin, 'min="15"')}
@@ -551,13 +610,29 @@
     const a = b.dataset.a, id = b.dataset.id;
     switch (a) {
       case 'tab': go(b.dataset.t); break;
-      case 'r+': { const it = byId(RUTINA, id), d = day(); d.rutina[id] = Math.min(it.meta, (d.rutina[id] || 0) + 1); changed(); break; }
+      case 'r+': { const d = day(); d.rutina[id] = Math.min(999, (d.rutina[id] || 0) + 1); changed(); break; }
+      case 'r+5': { const d = day(); d.rutina[id] = Math.min(999, (d.rutina[id] || 0) + 5); changed(); break; }
+      case 'r-set': { const v = pedirNumero('¿Cuántas repeticiones hiciste?', peek().rutina[id] || 0); if (v !== null) { day().rutina[id] = v; changed(); } break; }
+      case 'meta-r': { const it = byId(RUTINA, id), v = pedirNumero(`Meta de repeticiones para "${it.n}"`, metaR(it)); if (v > 0) { (S.plan[id] = S.plan[id] || {}).meta = v; changed(); } break; }
+      case 'meta-c': {
+        const it = byId(CORE, id), ser = pedirNumero(`Series para "${it.n}"`, seriesC(it), 20); if (!(ser > 0)) break;
+        const cada = pedirNumero(it.seg ? 'Segundos por serie' : 'Repeticiones por serie', it.seg ? segC(it) : repsC(it), 600); if (!(cada > 0)) break;
+        const pl = S.plan[id] = S.plan[id] || {}; pl.series = ser; if (it.seg) pl.seg = cada; else pl.reps = cada; changed(); break;
+      }
+      case 'core-todo': { const d = day(); CORE.forEach(it => { const m = metaCore(it); if (m > seriesC(it) && (d.core[it.id] || 0) < m && S.recup[it.id] > 0) { S.recup[it.id]--; if (!S.recup[it.id]) delete S.recup[it.id]; } d.core[it.id] = Math.max(d.core[it.id] || 0, m); }); delete d.omitido; changed(); toast('¡Bien! Espalda del día completa'); break; }
+      case 'core-no': { day().omitido = true; changed(); recordarManana(); toast('Listo, mañana te lo recuerdo de nuevo'); break; }
+      case 'pend-repartir': {
+        pendientes().forEach(q => { q.falta.forEach(f => { S.recup[f.it.id] = Math.min(3, (S.recup[f.it.id] || 0) + f.n); }); S.cerrados[q.k] = true; });
+        changed(); toast('Repartido: sumás hasta 1 serie extra por ejercicio en las próximas sesiones'); break;
+      }
+      case 'pend-dejar': { pendientes().forEach(q => { S.cerrados[q.k] = true; }); changed(); break; }
       case 'r-': { const d = day(); d.rutina[id] = Math.max(0, (d.rutina[id] || 0) - 1); changed(); break; }
-      case 'rok': { const it = byId(RUTINA, id), d = day(); d.rutina[id] = (d.rutina[id] || 0) >= it.meta ? 0 : it.meta; changed(); break; }
+      case 'rok': { const it = byId(RUTINA, id), d = day(); d.rutina[id] = (d.rutina[id] || 0) >= metaR(it) ? 0 : metaR(it); changed(); break; }
       case 'dolor': { if (S.dolor[id]) delete S.dolor[id]; else S.dolor[id] = true; changed(); break; }
       case 'serie': {
-        const it = byId(CORE, id), d = day(), n = Math.min(it.series, (d.core[id] || 0) + 1);
-        d.core[id] = n; changed(); if (n < it.series) startTimer(45, 'Descanso'); break;
+        const it = byId(CORE, id), d = day(), n = Math.min(20, (d.core[id] || 0) + 1);
+        d.core[id] = n; if (n > seriesC(it) && S.recup[id] > 0) { S.recup[id]--; if (!S.recup[id]) delete S.recup[id]; } // se descuenta la serie de recuperación
+        delete d.omitido; changed(); if (n < metaCore(it)) startTimer(45, 'Descanso'); break;
       }
       case 'serie-': { const d = day(); d.core[id] = Math.max(0, (d.core[id] || 0) - 1); changed(); break; }
       case 'timer': startTimer(parseInt(b.dataset.s, 10) || 15, b.dataset.l || 'Temporizador'); break;
@@ -630,7 +705,12 @@
       if (n.spo2Min > 100) return toast('El umbral de saturación no puede pasar de 100');
       const horas = String(fd.get('horasSpo2') || '').split(',').map(h => h.trim()).filter(Boolean);
       if (horas.some(h => !/^([01]?\d|2[0-3]):[0-5]\d$/.test(h))) return toast('Horarios con formato HH:MM, ej: 09:00, 21:00');
-      Object.assign(S.settings, n, { recAgua: fd.get('recAgua') === 'on', recSpo2: fd.get('recSpo2') === 'on', horasSpo2: horas.map(h => h.padStart(5, '0')).join(', '), notas: String(fd.get('notas') || '').slice(0, 1000) });
+      const hhmm = x => /^([01]\d|2[0-3]):[0-5]\d$/.test(x);
+      const dias = nm => fd.getAll(nm).map(Number).filter(v => v >= 0 && v <= 6);
+      const ag = { agRutOn: fd.get('agRutOn') === 'on', agRutDias: dias('agRutDias'), agRutHora: String(fd.get('agRutHora') || ''), agCoreOn: fd.get('agCoreOn') === 'on', agCoreDias: dias('agCoreDias'), agCoreHora: String(fd.get('agCoreHora') || ''), seguirOn: fd.get('seguirOn') === 'on', seguirHora: String(fd.get('seguirHora') || '') };
+      if (![ag.agRutHora, ag.agCoreHora, ag.seguirHora].every(hhmm)) return toast('Revisá las horas de la agenda');
+      if ((ag.agRutOn && !ag.agRutDias.length) || (ag.agCoreOn && !ag.agCoreDias.length)) return toast('Elegí al menos un día para cada agenda activada');
+      Object.assign(S.settings, n, ag, { recAgua: fd.get('recAgua') === 'on', recSpo2: fd.get('recSpo2') === 'on', horasSpo2: horas.map(h => h.padStart(5, '0')).join(', '), notas: String(fd.get('notas') || '').slice(0, 1000) });
       if (!NATIVE && (S.settings.recAgua || S.settings.recSpo2) && 'Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (er) { /* nada */ } }
       setupReminders(); changed(); toast('Ajustes guardados');
     }
@@ -652,9 +732,10 @@
     const N = plug('LocalNotifications'); if (!N) return;
     try {
       const pend = await N.getPending();
-      if (pend.notifications.length) await N.cancel({ notifications: pend.notifications.map(n => ({ id: n.id })) });
+      const viejas = pend.notifications.filter(n => n.id !== 3500); // 3500 = aviso de "mañana" (se conserva)
+      if (viejas.length) await N.cancel({ notifications: viejas.map(n => ({ id: n.id })) });
       const s = S.settings;
-      if (!s.recAgua && !s.recSpo2) return;
+      if (!s.recAgua && !s.recSpo2 && !s.agRutOn && !s.agCoreOn) return;
       let perm = await N.checkPermissions();
       if (perm.display !== 'granted') perm = await N.requestPermissions();
       if (perm.display !== 'granted') { toast('Activá las notificaciones de Salud Activa en los ajustes del teléfono'); return; }
@@ -672,8 +753,27 @@
           list.push({ id: 2000 + i, title: '🫁 Hora de medir la saturación', body: 'Sentado, en reposo, con la mano tibia y quieta.', channelId: 'recordatorios', schedule: at(hh * 60 + mm) });
         });
       }
+      const sem = (id, d, hora, title, body) => { const [hh, mm] = hora.split(':').map(Number); list.push({ id, title, body, channelId: 'recordatorios', schedule: { on: { weekday: d + 1, hour: hh, minute: mm }, allowWhileIdle: true } }); };
+      if (s.agRutOn) s.agRutDias.forEach(d => sem(3000 + d, d, s.agRutHora, '🌅 Rutina de la mañana', 'Son 6 ejercicios suaves. Marcá lo que hagas en la app.'));
+      if (s.agCoreOn) s.agCoreDias.forEach(d => {
+        sem(3100 + d, d, s.agCoreHora, '🧘 Hoy toca espalda y core', '10 a 15 minutos, ritmo lento. Después marcá si la hiciste.');
+        if (s.seguirOn) {
+          sem(3200 + d, d, s.seguirHora, '¿Hiciste tu espalda hoy?', 'Abrí la app y marcá "Lo hice" o "No pude". Si no, te lo recuerdo mañana.');
+          const sig = (d + 1) % 7;
+          if (!s.agCoreDias.includes(sig)) sem(3300 + d, sig, s.agCoreHora, '🧘 ¿Te quedó la espalda pendiente?', 'Si ayer no pudiste, abrí la app: podés repartirlo en las próximas sesiones.');
+        }
+      });
       if (list.length) await N.schedule({ notifications: list });
     } catch (e) { toast('No se pudieron programar los recordatorios'); }
+  }
+  // Aviso único para mañana a la hora de la agenda (se usa con "No pude hoy").
+  async function recordarManana() {
+    const N = plug('LocalNotifications'); if (!N) return;
+    try {
+      const [hh, mm] = S.settings.agCoreHora.split(':').map(Number), n = new Date();
+      const at = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1, hh, mm, 0);
+      await N.schedule({ notifications: [{ id: 3500, title: '🧘 Ayer no pudiste hacer la espalda', body: 'Hoy podés retomar si te sentís bien. Abrí la app.', channelId: 'recordatorios', schedule: { at, allowWhileIdle: true } }] });
+    } catch (e) { /* sin permiso de notificaciones */ }
   }
   function setupReminders() {
     clearInterval(recT); lastRec = Date.now();

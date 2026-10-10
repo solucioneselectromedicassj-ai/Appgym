@@ -34,6 +34,11 @@ La misma PWA se empaqueta como APK. `app.js` detecta `window.Capacitor` (`NATIVE
 - Compilar: GitHub → Actions → "APK Android" → artefacto `salud-activa-apk` (APK debug). Localmente: `npm ci && npm run sync` y abrir `android/` en Android Studio.
 - Si se agregan archivos web, sumarlos a `scripts/build-web.js` y a `sw.js`.
 
+## Agenda y metas de ejercicios
+- `settings.agRut*` (rutina matutina, por defecto todos los días 08:00) y `settings.agCore*` (espalda, por defecto lun/mié/vie 18:00) + `seguirOn/seguirHora` (pregunta nocturna y recordatorio al otro día). En Android se programan como notificaciones semanales (`scheduleNative`, ids 3000-3500).
+- Las repeticiones y series **no tienen tope**: se puede superar la meta; se escribe el número exacto tocando el contador; `S.plan[id]` guarda metas propias por ejercicio.
+- Espalda: "Lo hice todo" / "No pude hoy" (`day.omitido`, aviso único para mañana). `pendientes()` detecta sesiones incompletas de los últimos 7 días; "Repartir" las pasa a `S.recup` (máx. 3 por ejercicio, **como máximo 1 serie extra opcional por sesión**, por la lesión lumbar); "Dejarlo así" las cierra en `S.cerrados`.
+
 ## Cómo correrlo
 ```
 python3 -m http.server 8080      # o: npx serve .

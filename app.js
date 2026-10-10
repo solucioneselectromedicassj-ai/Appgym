@@ -2,6 +2,11 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
+  // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
+  const CAP = window.Capacitor;
+  const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
+  const plugins = {};
+  const plug = name => (NATIVE && CAP.registerPlugin ? (plugins[name] = plugins[name] || CAP.registerPlugin(name)) : null);
   const $ = (s, r = document) => r.querySelector(s);
   const pad = n => String(n).padStart(2, '0');
   const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -171,6 +176,39 @@
     const b = $('#pasosBar'); if (b) b.style.width = Math.min(100, Math.round(n / meta * 100)) + '%';
   }
 
+  /* ---------- Pasos automáticos (Health Connect, solo app Android) ---------- */
+  const health = { on: false, msg: NATIVE ? 'Todavía no conectaste Health Connect.' : '', last: 0 };
+  const refreshPasos = () => { if (tab === 'pasos' || tab === 'hoy') render(); };
+  async function syncPasos(pedir) {
+    const H = plug('HealthPlugin'); if (!H) return;
+    try {
+      if (!(await H.isHealthAvailable()).available) {
+        health.on = false; health.msg = 'Health Connect no está instalado o no está disponible en este teléfono.';
+        if (pedir) { try { await H.showHealthConnectInPlayStore(); } catch (e) { /* nada */ } }
+        return refreshPasos();
+      }
+      const q = { permissions: ['READ_STEPS'] };
+      const ok = r => (r.permissions || []).some(p => p && p.READ_STEPS);
+      let r = await H.checkHealthPermissions(q);
+      if (!ok(r) && pedir) r = await H.requestHealthPermissions(q);
+      if (!ok(r)) {
+        health.on = false;
+        health.msg = pedir ? 'No diste el permiso. Podés darlo en Health Connect → Permisos de aplicaciones → Salud Activa.' : 'Todavía no conectaste Health Connect.';
+        return refreshPasos();
+      }
+      const fin = new Date(), ini = new Date(fin.getFullYear(), fin.getMonth(), fin.getDate() - 6);
+      const res = await H.queryAggregated({ startDate: ini.toISOString(), endDate: fin.toISOString(), dataType: 'steps', bucket: 'day' });
+      (res.aggregatedData || []).forEach(a => {
+        const v = Math.round(a.value), k = ymd(new Date(a.startDate));
+        if (v > 0 && v <= 100000) { const d = day(k); if (v > d.pasos) d.pasos = v; }
+      });
+      health.on = true; health.last = Date.now(); health.msg = '';
+      save(); refreshPasos();
+    } catch (e) {
+      health.on = false; health.msg = 'No se pudieron leer los pasos de Health Connect.'; refreshPasos();
+    }
+  }
+
   /* ---------- Avisos de salud ---------- */
   function presionNivel(r) {
     if (r.sis >= 180 || r.dia >= 120) return 'crisis';
@@ -245,11 +283,15 @@
       <div class="big" id="pasosNum">${d.pasos}</div>
       <p class="muted" style="text-align:center">meta: ${s.metaPasos} pasos</p>
       <div class="bar"><i id="pasosBar" style="width:${Math.min(100, Math.round(d.pasos / s.metaPasos * 100))}%"></i></div>
-      <div class="row" style="margin-top:12px"><button class="${step.on ? 'dang' : 'pri'} grow" data-a="motion">${step.on ? 'Detener conteo' : 'Contar pasos ahora'}</button></div>
-      <small>${step.on ? 'Contando con el acelerómetro. Dejá la pantalla encendida y el teléfono en el bolsillo.' : 'El navegador solo cuenta mientras la app está abierta y la pantalla encendida.'}</small>
+      ${NATIVE ? '' : `<div class="row" style="margin-top:12px"><button class="${step.on ? 'dang' : 'pri'} grow" data-a="motion">${step.on ? 'Detener conteo' : 'Contar pasos ahora'}</button></div>
+      <small>${step.on ? 'Contando con el acelerómetro. Dejá la pantalla encendida y el teléfono en el bolsillo.' : 'El navegador solo cuenta mientras la app está abierta y la pantalla encendida.'}</small>`}
     </div>
+    ${NATIVE ? `<div class="card"><h3>Pasos automáticos</h3>
+      <p>${health.on ? `Conectado a Health Connect. Última lectura: ${pad(new Date(health.last).getHours())}:${pad(new Date(health.last).getMinutes())}.` : esc(health.msg)}</p>
+      <div class="row"><button class="${health.on ? 'ghost' : 'pri'} grow" data-a="health-sync">${health.on ? 'Sincronizar ahora' : 'Conectar Health Connect'}</button></div>
+      <small>Tu teléfono registra los pasos todo el día (Google Fit, Salud de Samsung, etc.) y esta app los lee de Health Connect cada vez que la abrís.</small></div>` : ''}
     <div class="card"><h3>Cargar pasos a mano</h3>
-      <small>Útil para copiar el total de Google Fit, Salud o tu pulsera.</small>
+      <small>Si no usás Health Connect, copiá el total de Google Fit, Salud o tu pulsera.</small>
       <label for="pasosInput">Cantidad</label><input id="pasosInput" type="number" inputmode="numeric" min="0" max="100000" placeholder="Ej: 3500">
       <div class="row" style="margin-top:8px"><button class="ghost grow" data-a="pasos-add">Sumar</button><button class="ghost grow" data-a="pasos-set">Fijar total del día</button></div>
     </div>
@@ -372,11 +414,11 @@
       <h3 style="margin-top:14px">Presión: umbral de aviso</h3><small>Consultá con tu médico qué valores usar.</small>
       <div class="grid2">${f('pSis', 'Máxima (sistólica)', s.pSis)}${f('pDia', 'Mínima (diastólica)', s.pDia)}</div>
       <h3 style="margin-top:14px">Recordatorio de agua</h3>
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recAgua" ${s.recAgua ? 'checked' : ''}>Avisar cada cierto tiempo (solo con la app abierta)</label>
+      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recAgua" ${s.recAgua ? 'checked' : ''}>Avisar cada cierto tiempo${NATIVE ? '' : ' (solo con la app abierta)'}</label>
       ${f('recMin', 'Cada cuántos minutos', s.recMin, 'min="15"')}
       <h3 style="margin-top:14px">Saturación (saturómetro)</h3><small>Consultá con tu médico qué valor usar como umbral.</small>
       <div class="grid2">${f('spo2Min', 'Umbral de aviso (%)', s.spo2Min)}</div>
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recSpo2" ${s.recSpo2 ? 'checked' : ''}>Recordarme medirla (solo con la app abierta)</label>
+      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recSpo2" ${s.recSpo2 ? 'checked' : ''}>Recordarme medirla${NATIVE ? '' : ' (solo con la app abierta)'}</label>
       <label for="s_horasSpo2">Horarios (HH:MM separados por coma)</label><input id="s_horasSpo2" name="horasSpo2" type="text" value="${esc(s.horasSpo2)}" placeholder="09:00, 21:00" style="min-height:44px">
       <label for="s_notas">Indicaciones de mi médico / kinesiólogo</label><textarea id="s_notas" name="notas" maxlength="1000" placeholder="Ej: evitar flexión de columna con carga; caminar 30 min diarios">${esc(s.notas)}</textarea>
       <div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar ajustes</button></div></form>
@@ -458,6 +500,7 @@
       case 'agua+': addAgua(1); break;
       case 'agua-': addAgua(-1); break;
       case 'motion': toggleMotion(); break;
+      case 'health-sync': syncPasos(true); break;
       case 'pasos-add': case 'pasos-set': {
         const n = Math.round(num($('#pasosInput').value));
         if (!(n >= 0) || n > 100000) { toast('Ingresá una cantidad válida'); break; }
@@ -521,7 +564,7 @@
       const horas = String(fd.get('horasSpo2') || '').split(',').map(h => h.trim()).filter(Boolean);
       if (horas.some(h => !/^([01]?\d|2[0-3]):[0-5]\d$/.test(h))) return toast('Horarios con formato HH:MM, ej: 09:00, 21:00');
       Object.assign(S.settings, n, { recAgua: fd.get('recAgua') === 'on', recSpo2: fd.get('recSpo2') === 'on', horasSpo2: horas.map(h => h.padStart(5, '0')).join(', '), notas: String(fd.get('notas') || '').slice(0, 1000) });
-      if ((S.settings.recAgua || S.settings.recSpo2) && 'Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (er) { /* nada */ } }
+      if (!NATIVE && (S.settings.recAgua || S.settings.recSpo2) && 'Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (er) { /* nada */ } }
       setupReminders(); changed(); toast('Ajustes guardados');
     }
   });
@@ -538,8 +581,36 @@
     } catch (e) { directo(); }
   }
   let recT = null, lastRec = Date.now(), lastSpo2 = '';
+  async function scheduleNative() {
+    const N = plug('LocalNotifications'); if (!N) return;
+    try {
+      const pend = await N.getPending();
+      if (pend.notifications.length) await N.cancel({ notifications: pend.notifications.map(n => ({ id: n.id })) });
+      const s = S.settings;
+      if (!s.recAgua && !s.recSpo2) return;
+      let perm = await N.checkPermissions();
+      if (perm.display !== 'granted') perm = await N.requestPermissions();
+      if (perm.display !== 'granted') { toast('Activá las notificaciones de Salud Activa en los ajustes del teléfono'); return; }
+      try { await N.createChannel({ id: 'recordatorios', name: 'Recordatorios', importance: 4, vibration: true }); } catch (e) { /* ya existe */ }
+      const list = [], at = m => ({ on: { hour: Math.floor(m / 60), minute: m % 60 }, allowWhileIdle: true });
+      if (s.recAgua) {
+        let i = 0;
+        for (let m = 8 * 60; m < 22 * 60 && i < 60; m += Math.max(15, s.recMin)) {
+          list.push({ id: 1000 + i++, title: '💧 Hora de tomar agua', body: `Vaso de ${s.vaso} ml`, channelId: 'recordatorios', schedule: at(m) });
+        }
+      }
+      if (s.recSpo2) {
+        String(s.horasSpo2 || '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 12).forEach((h, i) => {
+          const [hh, mm] = h.split(':').map(Number);
+          list.push({ id: 2000 + i, title: '🫁 Hora de medir la saturación', body: 'Sentado, en reposo, con la mano tibia y quieta.', channelId: 'recordatorios', schedule: at(hh * 60 + mm) });
+        });
+      }
+      if (list.length) await N.schedule({ notifications: list });
+    } catch (e) { toast('No se pudieron programar los recordatorios'); }
+  }
   function setupReminders() {
     clearInterval(recT); lastRec = Date.now();
+    if (NATIVE) { scheduleNative(); return; }
     if (!S.settings.recAgua && !S.settings.recSpo2) return;
     recT = setInterval(() => {
       const n = new Date(), h = n.getHours();
@@ -554,12 +625,13 @@
     }, 20000);
   }
 
-  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); else if (NATIVE) syncPasos(false); });
   window.addEventListener('pagehide', save);
 
   render();
   setupReminders();
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
+  if (NATIVE) { syncPasos(false); setInterval(() => syncPasos(false), 5 * 60000); }
+  else if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 
   // Ganchos para pruebas automáticas.
   window.SA = { state: () => S, detectStep, step, presionNivel, spo2Nivel, go, render, chart };

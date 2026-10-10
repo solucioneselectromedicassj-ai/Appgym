@@ -1,0 +1,24 @@
+{
+  "name": "salud-activa",
+  "version": "2.0.0",
+  "scripts": {
+    "build:web": "node scripts/build-web.js",
+    "sync": "node scripts/build-web.js && cap sync android"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/solucioneselectromedicassj-ai/appgym.git"
+  },
+  "bugs": {
+    "url": "https://github.com/solucioneselectromedicassj-ai/appgym/issues"
+  },
+  "homepage": "https://github.com/solucioneselectromedicassj-ai/appgym#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/local-notifications": "^8.3.1",
+    "capacitor-health": "^8.4.0"
+  },
+  "private": true
+}

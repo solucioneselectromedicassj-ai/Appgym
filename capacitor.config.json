@@ -1,0 +1,6 @@
+{
+  "appId": "ar.saludactiva.app",
+  "appName": "Salud Activa",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}

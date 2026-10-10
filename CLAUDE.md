@@ -19,7 +19,18 @@ figuras.js      ilustraciones SVG de los ejercicios (window.FIG(id)); un ejercic
 sw.js           service worker (cache-first, offline)
 manifest.json   instalación como app
 icon.svg, icon-192.png, icon-512.png
+capacitor.config.json, package.json, scripts/build-web.js   empaquetado Android (Capacitor)
+android/        proyecto Android generado por Capacitor (manifest con Health Connect y notificaciones)
+.github/workflows/android.yml   compila el APK en GitHub Actions
 ```
+
+## App Android (Capacitor)
+La misma PWA se empaqueta como APK. `app.js` detecta `window.Capacitor` (`NATIVE`):
+- **Pasos**: lee los pasos del día/semana de Health Connect (`capacitor-health`, solo permiso `READ_STEPS`) al abrir, al volver a la app y cada 5 min. Los pasos los registra Google Fit / Salud de Samsung / etc.; la app no mide por sí misma.
+- **Recordatorios**: notificaciones locales programadas (`@capacitor/local-notifications`), funcionan con la app cerrada. Se reprograman en `setupReminders()` cada vez que se guardan los ajustes.
+- En la app nativa no se registra el service worker (los archivos van dentro del APK).
+- Compilar: GitHub → Actions → "APK Android" → artefacto `salud-activa-apk` (APK debug). Localmente: `npm ci && npm run sync` y abrir `android/` en Android Studio.
+- Si se agregan archivos web, sumarlos a `scripts/build-web.js` y a `sw.js`.
 
 ## Cómo correrlo
 ```
@@ -52,8 +63,8 @@ Si se cambia el formato, mantener `load()` tolerante y subir `v`. Si se cambian 
 - Editar los archivos existentes en lugar de reescribirlos.
 
 ## Límites conocidos y próximos pasos
-1. **Pasos fiables todo el día**: una PWA no puede leer el podómetro del teléfono en segundo plano. Opciones: (a) Flutter con `health`/Health Connect (como Ocaland), (b) importar el total diario desde Google Fit/Health Connect. Hoy: acelerómetro con pantalla encendida + carga manual.
-2. **Recordatorios**: hoy solo funcionan con la app abierta. Para push reales hace falta backend (Supabase + Web Push) o app nativa.
+1. **Pasos**: en la web, acelerómetro con la pantalla encendida + carga manual. En Android, Health Connect (depende de que otra app registre los pasos). Falta lectura en segundo plano sin abrir la app.
+2. **Recordatorios en la web**: solo con la app abierta. En la app Android ya son nativos.
 3. **Sincronización entre dispositivos**: opcional con Supabase (misma pila de los otros proyectos), con RLS por usuario.
 4. Ideas: racha de días, registro de sueño y energía, ajuste de rutina según "Me dolió", exportar PDF, calentamiento guiado.
 

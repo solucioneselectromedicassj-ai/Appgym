@@ -2,7 +2,7 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
-  const APP_V = '2.3.0';
+  const APP_V = '2.4.0';
   const VERSION = 3; // versión del formato de datos guardados
   // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
   const CAP = window.Capacitor;
@@ -29,6 +29,20 @@
   const tsFecha = f => new Date(f + 'T12:00:00').getTime();
   const fmtFecha = f => { const [y, m, d] = f.split('-'); return `${d}/${m}/${y}`; };
   const fmtTs = t => { const d = new Date(t); return `${d.getDate()}/${d.getMonth() + 1} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+  const fechaLocal = f => new Date(f + 'T12:00:00');
+  const lunesDe = d => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }; // la semana va de lunes a domingo
+  const claveSemana = d => ymd(lunesDe(d));
+  const sumarDias = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  // Suma meses a una fecha 'AAAA-MM-DD' sin desbordar (31/12 + 2 meses = 28/02, no 03/03).
+  const sumarMeses = (f, n) => {
+    const [y, m, d] = f.split('-').map(Number), t = new Date(y, m - 1 + n, 1, 12), ult = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+    t.setDate(Math.min(d, ult)); return t;
+  };
+  const pctCambio = (nuevo, ant) => (ant ? (nuevo - ant) / ant * 100 : null);
+  const fmtPct = p => (p === null ? '—' : `${p > 0.05 ? '▲' : p < -0.05 ? '▼' : '='} ${Math.abs(p).toFixed(1).replace('.', ',')} %`);
+  const fmtDia = d => `${d.getDate()}/${d.getMonth() + 1}`;
+  const fmtDMA = d => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 
   /* ---------- Contenido: ejercicios ---------- */
   const RUTINA = [
@@ -161,6 +175,7 @@
     series.forEach(s => s.pts.forEach(q => { vals.push(q.v); times.push(q.t); }));
     if (!vals.length) return '<p class="muted">Todavía no hay datos para graficar.</p>';
     if (o.band) vals.push(o.band[0], o.band[1]);
+    if (o.goal) vals.push(o.goal.v);
     let lo = Math.min(...vals), hi = Math.max(...vals);
     if (lo === hi) { lo -= 1; hi += 1; }
     const m = (hi - lo) * 0.12; lo -= m; hi += m;
@@ -175,6 +190,7 @@
     g += `<text x="${L - 4}" y="${T + 6}" class="tick" text-anchor="end">${hi.toFixed(dec)}</text><text x="${L - 4}" y="${H - B}" class="tick" text-anchor="end">${lo.toFixed(dec)}</text>`;
     g += `<text x="${L}" y="${H - 6}" class="tick">${fd(t0)}</text>`;
     if (t1 !== t0) g += `<text x="${W - R}" y="${H - 6}" class="tick" text-anchor="end">${fd(t1)}</text>`;
+    if (o.goal) g += `<line x1="${L}" y1="${Y(o.goal.v).toFixed(1)}" x2="${W - R}" y2="${Y(o.goal.v).toFixed(1)}" class="goal"/><text x="${W - R}" y="${(Y(o.goal.v) - 4).toFixed(1)}" class="tick goalTxt" text-anchor="end">${esc(o.goal.label)}</text>`;
     series.forEach((s, i) => {
       const pts = s.pts.slice().sort((a, b) => a.t - b.t);
       const path = pts.map((q, j) => `${j ? 'L' : 'M'}${X(q.t).toFixed(1)} ${Y(q.v).toFixed(1)}`).join('');
@@ -182,6 +198,21 @@
     });
     const legend = series.length > 1 ? `<div class="legend">${series.map((s, i) => `<span class="lg s${i}">${esc(s.name)}</span>`).join('')}</div>` : '';
     return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(o.label || 'Gráfico')}">${g}</svg>${legend}`;
+  }
+
+  // Barras (una por semana) con línea de meta. items: [{l: etiqueta, v: valor}]
+  function barras(items, meta, label) {
+    const W = 320, H = 150, L = 34, R = 6, T = 14, B = 24, n = items.length;
+    const hi = Math.max(meta, ...items.map(q => q.v), 1) * 1.15, Y = v => T + (1 - v / hi) * (H - T - B);
+    const bw = (W - L - R) / n, w = bw * 0.62;
+    let g = `<line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" class="axis"/><line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" class="axis"/><text x="${L - 4}" y="${T + 4}" class="tick" text-anchor="end">${Math.round(hi)}</text><text x="${L - 4}" y="${H - B}" class="tick" text-anchor="end">0</text>`;
+    items.forEach((q, i) => {
+      const x = L + i * bw + (bw - w) / 2;
+      g += `<rect x="${x.toFixed(1)}" y="${Y(q.v).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(0, H - B - Y(q.v)).toFixed(1)}" class="barra ${q.v >= meta ? 'cumple' : ''}"/>`;
+      g += `<text x="${(x + w / 2).toFixed(1)}" y="${(Y(q.v) - 3).toFixed(1)}" class="tick" text-anchor="middle">${q.v}</text><text x="${(x + w / 2).toFixed(1)}" y="${H - 8}" class="tick" text-anchor="middle">${esc(q.l)}</text>`;
+    });
+    g += `<line x1="${L}" y1="${Y(meta).toFixed(1)}" x2="${W - R}" y2="${Y(meta).toFixed(1)}" class="goal"/><text x="${W - R}" y="${(Y(meta) - 3).toFixed(1)}" class="tick goalTxt" text-anchor="end">Meta ${meta}</text>`;
+    return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(label)}">${g}</svg>`;
   }
 
   /* ---------- Temporizador ---------- */
@@ -353,9 +384,63 @@
     return `<div class="card warn"><b>Peso fuera de rango</b><p>Tu último registro (${last.kg} kg) está ${Math.abs(diff).toFixed(1)} kg ${diff > 0 ? 'por encima' : 'por debajo'} de tu objetivo de ${S.settings.pesoObj} kg.</p></div>`;
   }
 
+  /* ---------- Colesterol ---------- */
+  const KC = [['total', 'Colesterol total'], ['ldl', 'LDL'], ['hdl', 'HDL'], ['tg', 'Triglicéridos']];
+  const RANGO_C = { total: [50, 800], ldl: [10, 600], hdl: [5, 200], tg: [10, 3000] };
+  // Análisis anterior (más viejo que el índice dado) que tenga cargado ese valor. rows viene ordenado del más nuevo al más viejo.
+  const analisisAnterior = (rows, idx, k) => { for (let j = idx + 1; j < rows.length; j++) if (rows[j][k] != null) return rows[j]; return null; };
+  const variacion = (rows, idx, k) => { const a = analisisAnterior(rows, idx, k); return a ? pctCambio(rows[idx][k], a[k]) : null; };
+  // Fecha sugerida para repetir el análisis: entre 2 y 3 meses después del último. Avisa cuando faltan 14 días o menos.
+  function proximoAnalisis() {
+    const u = porFecha(S.colesterol)[0]; if (!u) return null;
+    const desde = sumarMeses(u.fecha, 2), hasta = sumarMeses(u.fecha, 3), h = fechaLocal(hoy());
+    const dias = Math.round((desde - h) / 864e5);
+    return { u, desde, hasta, dias, vencido: h > hasta, avisar: dias <= 14 };
+  }
+  const AVISO_APP_ABIERTA = 'Este aviso solo aparece cuando abrís la app.';
+  function cardAnalisis() {
+    const a = proximoAnalisis(); if (!a || !a.avisar) return '';
+    const rango = `entre el ${fmtDMA(a.desde)} y el ${fmtDMA(a.hasta)}`;
+    const msg = a.vencido ? `Pasó el plazo sugerido (hasta el ${fmtDMA(a.hasta)}). Pedile a tu médico la orden para repetir el análisis.`
+      : a.dias > 0 ? `${a.dias === 1 ? 'Falta 1 día' : 'Faltan ' + a.dias + ' días'} para el momento sugerido de repetir tu análisis de colesterol: ${rango}.`
+        : `Ya es momento de repetir tu análisis de colesterol (${rango}).`;
+    return `<div class="card warn"><b>🩸 Nuevo análisis de colesterol</b><p>${msg}</p><small>Último análisis: ${fmtFecha(a.u.fecha)}. ${AVISO_APP_ABIERTA}</small></div>`;
+  }
+
+  /* ---------- Actividad aeróbica semanal ---------- */
+  const TIPOS_AERO = ['Caminata rápida', 'Bicicleta', 'Natación', 'Elíptica', 'Otra'];
+  const minSemana = clave => S.aero.reduce((a, r) => a + (r && Number.isFinite(r.min) && typeof r.fecha === 'string' && claveSemana(fechaLocal(r.fecha)) === clave ? r.min : 0), 0);
+  // Últimas n semanas (la actual al final): [{k, x: lunes, min}]
+  function semanasAero(n) {
+    const l = lunesDe(new Date());
+    return Array.from({ length: n }, (_, i) => { const x = sumarDias(l, -7 * (n - 1 - i)), k = ymd(x); return { k, x, min: minSemana(k) }; });
+  }
+  // Promedio semanal desde la primera semana con registros (hasta 8 semanas, contando la actual).
+  function promedioAero(n = 8) {
+    const ws = semanasAero(n), i0 = ws.findIndex(w => w.min > 0); if (i0 < 0) return null;
+    const usadas = ws.slice(i0); return { semanas: usadas.length, prom: Math.round(usadas.reduce((a, w) => a + w.min, 0) / usadas.length) };
+  }
+
+  /* ---------- Checklist de alimentación ---------- */
+  const marcasDia = (f = hoy()) => peek(f).comida || {};
+  const pescadoDia = (f = hoy()) => peek(f).pescado || 0;
+  // Cumplimiento del checklist diario de la semana que empieza en `lunes`, contando solo los días ya transcurridos.
+  function cumplimientoSemana(lunes) {
+    const items = S.comida.items; let dias = 0, ok = 0, pez = 0;
+    for (let i = 0; i < 7; i++) {
+      const x = sumarDias(lunes, i), k = ymd(x); if (k > hoy()) break;
+      dias++; const m = marcasDia(k); ok += items.filter(it => m[it.id]).length; pez += pescadoDia(k);
+    }
+    const tot = dias * items.length;
+    return { dias, ok, tot, pct: tot ? Math.round(ok / tot * 100) : null, pez };
+  }
+  const cumplimientoActual = () => cumplimientoSemana(lunesDe(new Date()));
+  const nuevoIdItem = () => 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const limpiarNombre = t => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+
   /* ---------- Vistas ---------- */
-  let tab = 'hoy', sub = 'presion';
-  const views = { hoy: viewHoy, pasos: viewPasos, espalda: viewEspalda, salud: viewSalud, ajustes: viewAjustes };
+  let tab = 'hoy', sub = 'presion', subC = 'ldl', subH = 'actividad';
+  const views = { hoy: viewHoy, pasos: viewPasos, espalda: viewEspalda, habitos: viewHabitos, salud: viewSalud, ajustes: viewAjustes };
 
   function rutinaItem(it) {
     const c = peek().rutina[it.id] || 0, meta = metaR(it), done = c >= meta, dol = S.dolor[it.id];
@@ -381,6 +466,7 @@
     const us = S.spo2.slice().sort((a, b) => b.ts - a.ts)[0];
     if (us && ymd(new Date(us.ts)) === hoy() && spo2Nivel(us) !== 'ok') aviso += `<div class="card warn"><b>Saturación de hoy: ${us.spo2}%</b><p>${spo2Msg}</p></div>`;
     if (hayDatos() && diasSinRespaldo() >= 7 && s.respaldoPospuesto !== hoy()) aviso += `<div class="card warn"><b>💾 Hacé un respaldo de tus datos</b><p>${s.ultimoRespaldo ? 'Hace ' + diasSinRespaldo() + ' días que no exportás un respaldo.' : 'Todavía no exportaste ningún respaldo.'} Tus datos viven solo en este teléfono: si lo perdés o desinstalás la app, se pierden.</p><div class="row"><button class="pri grow" data-a="export">Exportar respaldo</button><button class="ghost grow" data-a="resp-luego">Más tarde</button></div></div>`;
+    aviso += cardAnalisis();
     const pend = pendientes();
     if (pend.length) aviso += `<div class="card warn"><b>Espalda: tenés ${pend.length === 1 ? 'una sesión pendiente' : pend.length + ' sesiones pendientes'}</b><p>Podés repartirlo en las próximas sesiones o dejarlo así.</p><div class="row"><button class="ghost" data-a="tab" data-t="espalda">Ver pendientes</button></div></div>`;
     return `<h2>${DIAS[now.getDay()]} ${now.getDate()} de ${MESES[now.getMonth()]}</h2>${aviso}
@@ -388,6 +474,8 @@
       ${meter('Pasos', d.pasos, s.metaPasos)}
       ${meter('Agua', d.agua, s.metaAgua, 'ml')}
       ${meter('Rutina de la mañana', hechos, RUTINA.length)}
+      ${meter('Actividad de la semana', minSemana(claveSemana(now)), s.aeroMeta, 'min')}
+      ${meter('Alimentación de hoy', S.comida.items.filter(it => marcasDia()[it.id]).length, S.comida.items.length)}
       ${toca ? meter('Espalda y core', coreHechos, CORE.length) : `<small>Espalda y core: hoy descansás${proximaSesion() ? '. Próxima: ' + proximaSesion() : ''}.</small>`}
     </div>
     <div class="card"><h3>Agua</h3>
@@ -469,6 +557,45 @@
     <p class="foot">Ayuda personal: no reemplaza las indicaciones de tu médico ni de tu kinesiólogo.</p>`;
   }
 
+  function viewHabitos() {
+    const seg = `<div class="seg">${[['actividad', 'Actividad'], ['comida', 'Alimentación']].map(([k, n]) => `<button data-a="sub-h" data-v="${k}" class="${subH === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
+    return `<h2>Hábitos</h2>${seg}${subH === 'comida' ? subComida() : subActividad()}`;
+  }
+
+  function subActividad() {
+    const meta = S.settings.aeroMeta, ws = semanasAero(8), ahora = ws[ws.length - 1];
+    const recientes = S.aero.map((r, i) => ({ ...r, i })).filter(r => r && typeof r.fecha === 'string').sort((a, b) => b.fecha.localeCompare(a.fecha) || b.i - a.i).slice(0, 8);
+    const prom = promedioAero();
+    return `<div class="card"><h3>Esta semana</h3>${meter('Actividad aeróbica', ahora.min, meta, 'min')}
+      ${ahora.min >= meta ? '<p class="okTxt">¡Meta de la semana cumplida!</p>' : `<small>Te faltan ${meta - ahora.min} min para la meta de la semana (lunes a domingo).</small>`}</div>
+    <div class="card"><h3>Registrar actividad</h3>
+      <form data-f="aero"><div class="grid2">
+        <div><label for="aFecha">Fecha</label><input id="aFecha" name="fecha" type="date" value="${hoy()}" max="${hoy()}" required></div>
+        <div><label for="aMin">Minutos</label><input id="aMin" name="min" type="number" inputmode="numeric" min="1" max="600" required></div>
+      </div>
+      <label for="aTipo">Tipo</label><select id="aTipo" name="tipo">${TIPOS_AERO.map(t => `<option>${t}</option>`).join('')}</select>
+      <div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar</button></div></form>
+      <small>Actividad a ritmo moderado: que puedas hablar pero no cantar. Los pasos del día no reemplazan estos minutos. Consultá con tu médico y tu kinesiólogo la intensidad adecuada para tu presión y tu espalda.</small></div>
+    <div class="card"><h3>Últimas 8 semanas (minutos)</h3>${barras(ws.map(w => ({ l: fmtDia(w.x), v: w.min })), meta, 'Minutos de actividad por semana')}
+      ${prom ? `<small>Promedio semanal: <b>${prom.prom} min</b> (${prom.semanas} semana${prom.semanas === 1 ? '' : 's'} con datos).</small>` : '<small>Todavía no hay registros.</small>'}
+      <ul class="list">${recientes.map(r => `<li><span>${fmtFecha(r.fecha)} · <b>${r.min} min</b> · ${esc(r.tipo || 'Otra')}</span>${delBtn('aero', r.i)}</li>`).join('')}</ul></div>`;
+  }
+
+  function subComida() {
+    const items = S.comida.items, m = marcasDia(), c = cumplimientoActual(), pm = S.settings.pescadoMeta;
+    const hechosHoy = items.filter(it => m[it.id]).length;
+    const lista = items.length ? items.map(it => `<button class="chk-it ${m[it.id] ? 'on' : ''}" data-a="com-t" data-id="${esc(it.id)}" aria-pressed="${m[it.id] ? 'true' : 'false'}"><span>${m[it.id] ? '✅' : '⬜'}</span>${esc(it.n)}</button>`).join('') : '<p class="muted">La lista está vacía. Agregá ítems en Ajustes.</p>';
+    return `<div class="card"><h3>Hoy</h3>${lista}
+      <small>Marcá cada ítem si lo cumpliste hoy (${hechosHoy} de ${items.length}).</small></div>
+    <div class="card"><h3>Pescado azul</h3>
+      <div class="stepper"><button data-a="pez-" aria-label="Una menos">−</button><span>${pescadoDia()}</span><button data-a="pez+" aria-label="Una más">+</button></div>
+      ${meter('Esta semana (veces)', c.pez, pm)}
+      <small>Cargá las veces que comiste pescado azul hoy (por ejemplo sardinas o caballa). Meta semanal: ${pm}.</small></div>
+    <div class="card"><h3>Cumplimiento de la semana</h3>
+      ${c.pct === null ? '<p class="muted">Sin ítems para calcular.</p>' : `<div class="big">${c.pct} %</div><div class="bar"><i style="width:${c.pct}%"></i></div><small>${c.ok} de ${c.tot} casilleros marcados en ${c.dias} día${c.dias === 1 ? '' : 's'} (lunes a hoy). El pescado se cuenta aparte.</small>`}</div>
+    <div class="card"><small>Esta lista la armás vos en Ajustes. Los frutos secos, la chía y las semillas no vienen incluidos por su contenido de oxalato (antecedente de cálculos renales): sumalos solo si tu médico lo confirma.</small></div>`;
+  }
+
   function viewSalud() {
     const tabs = [['presion', 'Presión'], ['peso', 'Peso'], ['colesterol', 'Colesterol'], ['spo2', 'Saturación'], ['agua', 'Agua']];
     const seg = `<div class="seg">${tabs.map(([k, n]) => `<button data-a="sub" data-v="${k}" class="${sub === k ? 'on' : ''}">${n}</button>`).join('')}</div>`;
@@ -506,17 +633,32 @@
   }
 
   function subColesterol() {
-    const rows = porFecha(S.colesterol);
-    const pts = k => rows.filter(r => r[k] != null).slice(0, 20).map(r => ({ t: tsFecha(r.fecha), v: r[k] }));
+    const rows = porFecha(S.colesterol), meta = S.settings.ldlMeta, k = subC;
+    const nombreK = Object.fromEntries(KC);
     const f = (id, n, l) => `<div><label for="${id}">${l}</label><input id="${id}" name="${n}" type="number" inputmode="decimal" step="any" min="0"></div>`;
-    const dato = r => ['total', 'ldl', 'hdl', 'tg'].filter(k => r[k] != null).map(k => `${({ total: 'Total', ldl: 'LDL', hdl: 'HDL', tg: 'TG' })[k]} ${r[k]}`).join(' · ');
-    return `<div class="card"><h3>Cargar análisis de laboratorio</h3>
-      <form data-f="colesterol"><label for="cFecha">Fecha del análisis</label><input id="cFecha" name="fecha" type="date" value="${hoy()}" required>
-      <div class="grid2">${f('cTot', 'total', 'Colesterol total')}${f('cLdl', 'ldl', 'LDL')}${f('cHdl', 'hdl', 'HDL')}${f('cTg', 'tg', 'Triglicéridos')}</div>
+    const dato = (r, idx) => KC.filter(([c]) => r[c] != null).map(([c, n]) => `${c === 'total' ? 'Total' : n === 'Triglicéridos' ? 'TG' : n} ${r[c]}${analisisAnterior(rows, idx, c) ? ' (' + fmtPct(variacion(rows, idx, c)) + ')' : ''}`).join(' · ');
+    // Resumen: último valor de cada tipo contra el análisis anterior que lo tenga
+    const filas = KC.map(([c, n]) => {
+      const idx = rows.findIndex(r => r[c] != null); if (idx < 0) return '';
+      const a = analisisAnterior(rows, idx, c);
+      return `<tr><td>${n}</td><td><b>${rows[idx][c]}</b></td><td>${a ? a[c] : '—'}</td><td>${a ? fmtPct(variacion(rows, idx, c)) : '—'}</td></tr>`;
+    }).join('');
+    const resumen = filas ? `<div class="card"><h3>Cambio respecto del análisis anterior</h3><table class="tabla"><tr><th>Valor</th><th>Último</th><th>Anterior</th><th>Cambio</th></tr>${filas}</table><small>Valores en mg/dL. Los objetivos los define tu médico.</small></div>` : '';
+    const ult = rows.find(r => r.ldl != null);
+    const estadoMeta = k !== 'ldl' ? '' : meta == null
+      ? '<small>Todavía no cargaste una meta de LDL. Fijala en Ajustes cuando la defina tu médico.</small>'
+      : (ult ? `<p>Último LDL: <b>${ult.ldl}</b> mg/dL · Meta de tu médico: <b>${meta}</b> mg/dL · ${ult.ldl <= meta ? 'estás en la meta o por debajo' : 'te faltan ' + (ult.ldl - meta).toFixed(0).replace('.', ',') + ' mg/dL (' + fmtPct(pctCambio(meta, ult.ldl)).replace('▼ ', '−') + ')'}.</p>` : '');
+    const a = proximoAnalisis();
+    const seg = `<div class="seg">${KC.map(([c, n]) => `<button data-a="sub-c" data-v="${c}" class="${k === c ? 'on' : ''}">${c === 'total' ? 'Total' : c === 'tg' ? 'TG' : n}</button>`).join('')}</div>`;
+    return `${cardAnalisis()}<div class="card"><h3>Cargar análisis de laboratorio</h3>
+      <form data-f="colesterol"><label for="cFecha">Fecha del análisis</label><input id="cFecha" name="fecha" type="date" value="${hoy()}" max="${hoy()}" required>
+      <div class="grid2">${f('cLdl', 'ldl', 'LDL')}${f('cHdl', 'hdl', 'HDL')}${f('cTot', 'total', 'Total')}${f('cTg', 'tg', 'Triglicéridos')}</div>
       <div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar</button></div></form>
-      <small>Valores en mg/dl. Los valores objetivo los define tu médico.</small></div>
-    <div class="card"><h3>Evolución</h3>${chart([{ name: 'Total', pts: pts('total') }, { name: 'LDL', pts: pts('ldl') }], { label: 'Colesterol' })}
-      <ul class="list">${rows.slice(0, 8).map(r => `<li><span>${fmtFecha(r.fecha)} · ${dato(r)}</span>${delBtn('colesterol', r.i)}</li>`).join('')}</ul></div>`;
+      <small>Valores en mg/dL. Podés cargar solo algunos. Si ya hay un análisis de esa fecha, se completa con lo nuevo.</small></div>
+    ${resumen}
+    <div class="card"><h3>Evolución</h3>${seg}${chart([{ name: nombreK[k], pts: rows.filter(r => r[k] != null).slice(0, 20).map(r => ({ t: tsFecha(r.fecha), v: r[k] })) }], { label: 'Evolución de ' + nombreK[k], goal: k === 'ldl' && meta != null ? { v: meta, label: 'Meta ' + meta } : null })}${estadoMeta}
+      <ul class="list">${rows.slice(0, 10).map((r, idx) => `<li><span>${fmtFecha(r.fecha)} · ${dato(r, idx)}</span>${delBtn('colesterol', r.i)}</li>`).join('')}</ul></div>
+    ${a ? `<div class="card"><b>Próximo análisis sugerido</b><p>Entre el ${fmtDMA(a.desde)} y el ${fmtDMA(a.hasta)} (2 a 3 meses después del último). Confirmá con tu médico cada cuánto repetirlo.</p><small>${AVISO_APP_ABIERTA}</small></div>` : ''}`;
   }
 
   function subSpo2() {
@@ -552,6 +694,10 @@
     return `<h2>Ajustes</h2>
     <form data-f="ajustes" class="card"><h3>Metas</h3>
       <div class="grid2">${f('pesoObj', 'Peso objetivo (kg)', s.pesoObj)}${f('pesoTol', 'Tolerancia (± kg)', s.pesoTol)}${f('metaPasos', 'Meta de pasos', s.metaPasos)}${f('metaAgua', 'Meta de agua (ml)', s.metaAgua)}${f('vaso', 'Tamaño del vaso (ml)', s.vaso)}</div>
+      <h3 style="margin-top:14px">Colesterol</h3><small>La meta de LDL la define tu médico: dejala vacía hasta que la tengas.</small>
+      <label for="s_ldlMeta">Meta de LDL (mg/dL)</label><input id="s_ldlMeta" name="ldlMeta" type="number" inputmode="decimal" step="any" min="20" max="400" value="${s.ldlMeta == null ? '' : s.ldlMeta}" placeholder="Sin meta fijada">
+      <h3 style="margin-top:14px">Actividad y alimentación</h3>
+      <div class="grid2">${f('aeroMeta', 'Actividad semanal (minutos)', s.aeroMeta)}${f('pescadoMeta', 'Pescado azul por semana (veces)', s.pescadoMeta)}</div>
       <label for="s_umbral">Sensibilidad del contador de pasos</label>
       <select id="s_umbral" name="umbral">${[[0.9, 'Alta (detecta pasos suaves)'], [1.3, 'Normal'], [1.8, 'Baja (evita falsos pasos)']].map(([v, n]) => `<option value="${v}" ${s.umbral === v ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <h3 style="margin-top:14px">Presión: umbral de aviso</h3><small>Consultá con tu médico qué valores usar.</small>
@@ -575,6 +721,11 @@
       <label for="s_horasSpo2">Horarios (HH:MM separados por coma)</label><input id="s_horasSpo2" name="horasSpo2" type="text" value="${esc(s.horasSpo2)}" placeholder="09:00, 21:00" style="min-height:44px">
       <label for="s_notas">Indicaciones de mi médico / kinesiólogo</label><textarea id="s_notas" name="notas" maxlength="1000" placeholder="Ej: evitar flexión de columna con carga; caminar 30 min diarios">${esc(s.notas)}</textarea>
       <div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar ajustes</button></div></form>
+    <div class="card"><h3>Checklist de alimentación</h3>
+      <small>Es tu lista diaria. Tocá para renombrar o quitar; podés agregar los ítems que quieras.</small>
+      <ul class="list">${S.comida.items.map(it => `<li><span>${esc(it.n)}</span><span class="row"><button class="ghost mini" data-a="ci-ren" data-id="${esc(it.id)}">Renombrar</button><button class="dang mini" data-a="ci-del" data-id="${esc(it.id)}">Quitar</button></span></li>`).join('')}</ul>
+      <div class="row" style="margin-top:8px"><button class="pri grow" data-a="ci-add">Agregar ítem</button><button class="ghost grow" data-a="ci-reset">Restaurar lista inicial</button></div>
+      <small>Frutos secos, chía y semillas no vienen incluidos por el oxalato (cálculos renales): agregalos solo si tu médico lo confirma.</small></div>
     <div class="card"><h3>Datos</h3>
       <p class="muted">Todo se guarda solo en este dispositivo. Hacé copias de seguridad. Último respaldo: <b>${s.ultimoRespaldo ? fmtFecha(ymd(new Date(s.ultimoRespaldo))) : 'nunca'}</b>.</p>
       <div class="row"><button class="pri grow" data-a="export">Exportar respaldo (JSON)</button><button class="ghost grow" data-a="copiar">Copiar respaldo</button></div>
@@ -646,19 +797,51 @@
     S = DEFAULTS(); setupReminders(); changed(); toast('Datos borrados');
   }
 
-  function informe() {
-    const s = S.settings, el = $('#informe');
+  // Cuerpo del informe para el médico (todo el texto de usuario pasa por esc()).
+  function informeCuerpo() {
+    const s = S.settings;
     const pe = porFecha(S.peso).slice(0, 12);
     const pr = S.presion.slice().sort((a, b) => b.ts - a.ts).slice(0, 20);
-    const co = porFecha(S.colesterol).slice(0, 8);
-    const tabla = (cab, filas) => `<table><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr>${filas.map(f => `<tr>${f.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${cab.length}">Sin registros</td></tr>`}</table>`;
-    el.innerHTML = `<h1>Informe de salud — ${fmtFecha(hoy())}</h1>
-      <p>Peso objetivo: ${s.pesoObj} kg (±${s.pesoTol}). Meta diaria: ${s.metaPasos} pasos, ${s.metaAgua} ml de agua.</p>
+    const co = porFecha(S.colesterol);
+    const tabla = (cab, filas) => `<table><tr>${cab.map(c => `<th>${esc(c)}</th>`).join('')}</tr>${filas.map(f => `<tr>${f.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${cab.length}">Sin registros</td></tr>`}</table>`;
+    const celda = (rows, idx, k) => (rows[idx][k] == null ? '-' : `${rows[idx][k]}${analisisAnterior(rows, idx, k) ? ' (' + fmtPct(variacion(rows, idx, k)) + ')' : ''}`);
+    const ldlPts = co.filter(r => r.ldl != null).slice(0, 12).map(r => ({ t: tsFecha(r.fecha), v: r.ldl }));
+    const aero = promedioAero(), ws = semanasAero(8);
+    const comidaSem = [3, 2, 1, 0].map(n => { const l = sumarDias(lunesDe(new Date()), -7 * n), c = cumplimientoSemana(l); return [`Semana del ${fmtDia(l)}`, c.pct === null ? '-' : c.pct + ' %', `${c.pez} de ${s.pescadoMeta}`]; });
+    const an = proximoAnalisis();
+    return `<h1>Informe de salud — ${fmtFecha(hoy())}</h1>
+      <p>Peso objetivo: ${s.pesoObj} kg (±${s.pesoTol}). Meta diaria: ${s.metaPasos} pasos, ${s.metaAgua} ml de agua. Actividad aeróbica: meta de ${s.aeroMeta} min por semana.</p>
       ${s.notas.trim() ? `<h3>Indicaciones médicas anotadas</h3><p>${esc(s.notas).replace(/\n/g, '<br>')}</p>` : ''}
+      <h3>Colesterol (mg/dL): evolución</h3>
+      <p>${s.ldlMeta == null ? 'Meta de LDL: sin fijar.' : `Meta de LDL fijada por el médico: ${s.ldlMeta} mg/dL.`}${an ? ` Repetir el análisis entre el ${fmtDMA(an.desde)} y el ${fmtDMA(an.hasta)}.` : ''}</p>
+      ${tabla(['Fecha', 'LDL', 'HDL', 'Total', 'TG'], co.slice(0, 10).map((r, i) => [fmtFecha(r.fecha), celda(co, i, 'ldl'), celda(co, i, 'hdl'), celda(co, i, 'total'), celda(co, i, 'tg')]))}
+      <p class="peque">Entre paréntesis: variación porcentual contra el análisis anterior que tenía ese valor.</p>
+      ${ldlPts.length ? chart([{ name: 'LDL', pts: ldlPts }], { label: 'Evolución del LDL', goal: s.ldlMeta != null ? { v: s.ldlMeta, label: 'Meta ' + s.ldlMeta } : null }) : ''}
+      <h3>Actividad aeróbica</h3>
+      <p>${aero ? `Promedio semanal: <b>${aero.prom} min</b> (${aero.semanas} semana${aero.semanas === 1 ? '' : 's'} con registros, incluida la actual) · meta ${s.aeroMeta} min.` : 'Sin registros de actividad.'}</p>
+      ${tabla(['Semana del', 'Minutos'], ws.slice().reverse().map(w => [fmtFecha(w.k), w.min]))}
+      <h3>Alimentación (checklist)</h3>
+      <p>Ítems: ${S.comida.items.map(it => esc(it.n)).join('; ') || 'ninguno'}.</p>
+      ${tabla(['Semana', 'Cumplimiento', 'Pescado azul'], comidaSem)}
       <h3>Presión arterial</h3>${tabla(['Fecha', 'Máx/Mín', 'Pulso'], pr.map(r => [fmtTs(r.ts), `${r.sis}/${r.dia}`, r.pul || '-']))}
       <h3>Saturación de oxígeno</h3>${tabla(['Fecha', 'SpO2 %', 'Pulso'], S.spo2.slice().sort((a, b) => b.ts - a.ts).slice(0, 20).map(r => [fmtTs(r.ts), r.spo2, r.pul || '-']))}
       <h3>Peso</h3>${tabla(['Fecha', 'kg'], pe.map(r => [fmtFecha(r.fecha), r.kg]))}
-      <h3>Colesterol (mg/dl)</h3>${tabla(['Fecha', 'Total', 'LDL', 'HDL', 'TG'], co.map(r => [fmtFecha(r.fecha), r.total ?? '-', r.ldl ?? '-', r.hdl ?? '-', r.tg ?? '-']))}`;
+      <p class="peque">Registros hechos por el propio usuario con la app Salud Activa; no reemplazan estudios ni indicaciones médicas.</p>`;
+  }
+  const ESTILO_INFORME = 'body{font:14px/1.4 system-ui,sans-serif;color:#000;max-width:720px;margin:16px auto;padding:0 12px}h1{font-size:20px}h3{margin:16px 0 4px}table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #888;padding:4px 6px;text-align:left}.peque{font-size:11px;color:#444}.chart{width:100%;max-width:520px;height:auto}.axis{stroke:#888}.tick{fill:#444;font-size:9px}.line{fill:none;stroke-width:2;stroke:#0f766e}.dot{fill:#0f766e}.goal{stroke:#c2410c;stroke-width:1.5;stroke-dasharray:5 3}.goalTxt{fill:#c2410c}.band{fill:#e3f3f0}';
+  async function informe() {
+    const cuerpo = informeCuerpo();
+    const F = plug('Filesystem'), Sh = plug('Share');
+    if (NATIVE && F && Sh) {
+      // En el APK no se puede imprimir: se comparte un archivo .html que se abre en el navegador (ahí se imprime o se guarda como PDF).
+      try {
+        const doc = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Informe de salud</title><style>${ESTILO_INFORME}</style></head><body>${cuerpo}</body></html>`;
+        const r = await F.writeFile({ path: `informe-salud-${hoy()}.html`, data: doc, directory: 'CACHE', encoding: 'utf8' });
+        await Sh.share({ title: 'Informe de salud', text: 'Informe de salud (abrilo con el navegador para imprimirlo o guardarlo como PDF)', files: [r.uri], dialogTitle: 'Enviar el informe a…' });
+      } catch (e) { toast('No se pudo preparar el informe'); }
+      return;
+    }
+    $('#informe').innerHTML = cuerpo;
     document.body.classList.add('printing');
     window.onafterprint = () => document.body.classList.remove('printing');
     try { window.print(); } catch (e) { document.body.classList.remove('printing'); }
@@ -708,6 +891,15 @@
         const d = day(); d.pasos = a === 'pasos-add' ? d.pasos + n : n; changed(); break;
       }
       case 'sub': sub = b.dataset.v; render(); break;
+      case 'sub-c': subC = b.dataset.v; render(); break;
+      case 'sub-h': subH = b.dataset.v; render(); break;
+      case 'com-t': { const d = day(); d.comida = d.comida || {}; if (d.comida[id]) delete d.comida[id]; else d.comida[id] = true; changed(); break; }
+      case 'pez+': { const d = day(); d.pescado = Math.min(20, (d.pescado || 0) + 1); changed(); break; }
+      case 'pez-': { const d = day(); d.pescado = Math.max(0, (d.pescado || 0) - 1); if (!d.pescado) delete d.pescado; changed(); break; }
+      case 'ci-add': { const raw = window.prompt('Nombre del nuevo ítem del checklist'); if (raw === null) break; const n = limpiarNombre(raw); if (n) { S.comida.items.push({ id: nuevoIdItem(), n }); changed(); } else toast('El nombre no puede estar vacío'); break; }
+      case 'ci-ren': { const it = S.comida.items.find(x => x.id === id); if (!it) break; const n = limpiarNombre(window.prompt('Nuevo nombre del ítem', it.n)); if (n) { it.n = n; changed(); } break; }
+      case 'ci-del': { const i = S.comida.items.findIndex(x => x.id === id); if (i >= 0 && confirm(`¿Quitar "${S.comida.items[i].n}" del checklist? Los días ya marcados no se borran.`)) { S.comida.items.splice(i, 1); changed(); } break; }
+      case 'ci-reset': if (confirm('Se vuelve a la lista inicial (se pierden los ítems que agregaste o renombraste). Las marcas de los días no se borran. ¿Seguir?')) { S.comida.items = ITEMS_COMIDA(); changed(); } break;
       case 'del': {
         const k = b.dataset.k, i = parseInt(b.dataset.i, 10);
         if (Array.isArray(S[k]) && i >= 0 && i < S[k].length && confirm('¿Borrar este registro?')) { S[k].splice(i, 1); changed(); }
@@ -743,27 +935,42 @@
       if (pul !== null && !(pul >= 30 && pul <= 220)) return toast('Revisá el pulso');
       S.spo2.push({ ts: Date.now(), spo2: Math.round(sat), pul: pul === null ? null : Math.round(pul) });
       changed(); toast('Saturación guardada');
+    } else if (kind === 'aero') {
+      const fecha = String(fd.get('fecha') || ''), min = g('min'), tipo = TIPOS_AERO.includes(fd.get('tipo')) ? fd.get('tipo') : 'Otra';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return toast('Revisá la fecha');
+      if (fecha > hoy()) return toast('La fecha no puede ser futura');
+      if (!(min >= 1 && min <= 600)) return toast('Los minutos deben estar entre 1 y 600');
+      S.aero.push({ fecha, min: Math.round(min), tipo }); changed(); toast('Actividad guardada');
     } else if (kind === 'peso') {
       const kg = g('kg'), fecha = String(fd.get('fecha') || '');
       if (!(kg >= 30 && kg <= 300) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return toast('Revisá el peso y la fecha');
       S.peso.push({ fecha, kg: Math.round(kg * 10) / 10 }); changed(); toast('Peso guardado');
     } else if (kind === 'colesterol') {
-      const fecha = String(fd.get('fecha') || ''), r = { fecha };
-      let alguno = false;
-      for (const k of ['total', 'ldl', 'hdl', 'tg']) {
-        const v = opt(k);
-        if (v !== null) { if (!(v > 0 && v < 2000)) return toast('Revisá los valores'); r[k] = v; alguno = true; }
+      const fecha = String(fd.get('fecha') || ''), r = {};
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return toast('Revisá la fecha del análisis');
+      if (fecha > hoy()) return toast('La fecha del análisis no puede ser futura');
+      for (const [k, nombre] of KC) {
+        const v = opt(k); if (v === null) continue;
+        if (!(v >= RANGO_C[k][0] && v <= RANGO_C[k][1])) return toast(`Revisá ${nombre}: debería estar entre ${RANGO_C[k][0]} y ${RANGO_C[k][1]}`);
+        r[k] = v;
       }
-      if (!alguno || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return toast('Cargá al menos un valor y la fecha');
-      S.colesterol.push(r); changed(); toast('Análisis guardado');
+      if (!Object.keys(r).length) return toast('Cargá al menos un valor');
+      const previo = S.colesterol.find(x => x.fecha === fecha);
+      if (previo) Object.assign(previo, r); else S.colesterol.push(Object.assign({ fecha }, r));
+      changed();
+      const a = proximoAnalisis();
+      toast(previo ? 'Análisis de esa fecha actualizado' : `Análisis guardado. Repetilo entre el ${fmtDMA(a.desde)} y el ${fmtDMA(a.hasta)}`);
     } else if (kind === 'ajustes') {
       const n = {
         pesoObj: g('pesoObj'), pesoTol: g('pesoTol'), metaPasos: g('metaPasos'), metaAgua: g('metaAgua'), vaso: g('vaso'),
-        umbral: g('umbral'), pSis: g('pSis'), pDia: g('pDia'), recMin: g('recMin'), spo2Min: g('spo2Min')
+        umbral: g('umbral'), pSis: g('pSis'), pDia: g('pDia'), recMin: g('recMin'), spo2Min: g('spo2Min'), aeroMeta: g('aeroMeta'), pescadoMeta: g('pescadoMeta')
       };
+      const ldlMeta = opt('ldlMeta');
+      if (ldlMeta !== null && !(ldlMeta >= 20 && ldlMeta <= 400)) return toast('La meta de LDL debe estar entre 20 y 400 mg/dL');
       if (Object.values(n).some(v => !(v > 0))) return toast('Revisá los valores: deben ser mayores que cero');
       if (n.recMin < 15) n.recMin = 15;
       if (n.spo2Min > 100) return toast('El umbral de saturación no puede pasar de 100');
+      if (n.aeroMeta > 2000 || n.pescadoMeta > 21) return toast('Revisá las metas de actividad y de pescado');
       const horas = String(fd.get('horasSpo2') || '').split(',').map(h => h.trim()).filter(Boolean);
       if (horas.some(h => !/^([01]?\d|2[0-3]):[0-5]\d$/.test(h))) return toast('Horarios con formato HH:MM, ej: 09:00, 21:00');
       const hhmm = x => /^([01]\d|2[0-3]):[0-5]\d$/.test(x);
@@ -771,7 +978,7 @@
       const ag = { agRutOn: fd.get('agRutOn') === 'on', agRutDias: dias('agRutDias'), agRutHora: String(fd.get('agRutHora') || ''), agCoreOn: fd.get('agCoreOn') === 'on', agCoreDias: dias('agCoreDias'), agCoreHora: String(fd.get('agCoreHora') || ''), seguirOn: fd.get('seguirOn') === 'on', seguirHora: String(fd.get('seguirHora') || '') };
       if (![ag.agRutHora, ag.agCoreHora, ag.seguirHora].every(hhmm)) return toast('Revisá las horas de la agenda');
       if ((ag.agRutOn && !ag.agRutDias.length) || (ag.agCoreOn && !ag.agCoreDias.length)) return toast('Elegí al menos un día para cada agenda activada');
-      Object.assign(S.settings, n, ag, { recAgua: fd.get('recAgua') === 'on', recSpo2: fd.get('recSpo2') === 'on', horasSpo2: horas.map(h => h.padStart(5, '0')).join(', '), notas: String(fd.get('notas') || '').slice(0, 1000) });
+      Object.assign(S.settings, n, ag, { ldlMeta, recAgua: fd.get('recAgua') === 'on', recSpo2: fd.get('recSpo2') === 'on', horasSpo2: horas.map(h => h.padStart(5, '0')).join(', '), notas: String(fd.get('notas') || '').slice(0, 1000) });
       if (!NATIVE && (S.settings.recAgua || S.settings.recSpo2) && 'Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (er) { /* nada */ } }
       setupReminders(); changed(); toast('Ajustes guardados');
     }
@@ -862,5 +1069,5 @@
   else if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 
   // Ganchos para pruebas automáticas.
-  window.SA = { state: () => S, detectStep, step, presionNivel, spo2Nivel, go, render, chart };
+  window.SA = { state: () => S, detectStep, step, presionNivel, spo2Nivel, go, render, chart, informeCuerpo };
 })();

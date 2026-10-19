@@ -1,5 +1,5 @@
 /* Service worker: la app funciona sin conexión (cache-first del "shell"). */
-const CACHE = 'salud-activa-v2';
+const CACHE = 'salud-activa-v3';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'figuras.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

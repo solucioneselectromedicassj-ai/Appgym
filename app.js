@@ -2,7 +2,8 @@
 /* Salud Activa — PWA sin dependencias. Datos solo en este dispositivo (localStorage). */
 (function () {
   const KEY = 'saludActivaV1';
-  const APP_V = '2.2.0';
+  const APP_V = '2.3.0';
+  const VERSION = 3; // versión del formato de datos guardados
   // App Android (Capacitor): pasos desde Health Connect y recordatorios nativos. En el navegador queda la versión web.
   const CAP = window.Capacitor;
   const NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNativePlatform());
@@ -48,24 +49,52 @@
   ];
 
   /* ---------- Estado ---------- */
+  const ITEMS_COMIDA = () => [
+    { id: 'avena', n: 'Avena o legumbres' },
+    { id: 'frituras', n: 'Sin frituras' },
+    { id: 'fiambres', n: 'Sin fiambres ni embutidos' },
+    { id: 'oliva', n: 'Aceite de oliva en lugar de grasas animales' }
+  ];
+  const CONOCIDAS = ['v', 'settings', 'days', 'peso', 'presion', 'colesterol', 'spo2', 'aero', 'comida', 'dolor', 'sensor', 'plan', 'cerrados', 'recup'];
   const DEFAULTS = () => ({
-    v: 2,
+    v: VERSION,
     settings: { pesoObj: 88, pesoTol: 1.5, metaPasos: 8000, metaAgua: 2500, vaso: 250, umbral: 1.3, pSis: 140, pDia: 90, recAgua: false, recMin: 90, notas: '', spo2Min: 92, recSpo2: false, horasSpo2: '09:00, 21:00', segundoPlano: true,
-      agRutOn: true, agRutDias: [0, 1, 2, 3, 4, 5, 6], agRutHora: '08:00', agCoreOn: true, agCoreDias: [1, 3, 5], agCoreHora: '18:00', seguirOn: true, seguirHora: '21:00', agDesde: '' },
-    days: {}, peso: [], presion: [], colesterol: [], spo2: [], dolor: {}, sensor: null, plan: {}, cerrados: {}, recup: {}
+      agRutOn: true, agRutDias: [0, 1, 2, 3, 4, 5, 6], agRutHora: '08:00', agCoreOn: true, agCoreDias: [1, 3, 5], agCoreHora: '18:00', seguirOn: true, seguirHora: '21:00', agDesde: '',
+      ldlMeta: null, aeroMeta: 150, pescadoMeta: 2, ultimoRespaldo: 0, respaldoPospuesto: '' },
+    days: {}, peso: [], presion: [], colesterol: [], spo2: [], aero: [], comida: { items: ITEMS_COMIDA() }, dolor: {}, sensor: null, plan: {}, cerrados: {}, recup: {}
   });
 
+  // Guarda una copia textual de los datos bajo otra clave (sin pisar una existente salvo que se pida).
+  function guardarCopia(clave, texto, pisar) {
+    try { if (pisar || localStorage.getItem(clave) === null) localStorage.setItem(clave, texto); } catch (e) { /* sin espacio */ }
+  }
+  const esObjeto = x => x && typeof x === 'object' && !Array.isArray(x);
+
+  /* Carga tolerante y con migración: solo agrega campos nuevos, nunca borra lo guardado.
+     - Antes de migrar a un formato más nuevo se deja una copia intacta (saludActivaV1_antes_vN).
+     - Si los datos están corruptos se conserva el texto original (saludActivaV1_corrupto) en vez de pisarlo.
+     - Las claves desconocidas (por ejemplo de una versión más nueva) se conservan. */
   function load() {
     const d = DEFAULTS();
-    try {
-      const r = JSON.parse(localStorage.getItem(KEY) || 'null');
-      if (r && typeof r === 'object') {
-        Object.assign(d.settings, r.settings || {});
-        ['days', 'dolor', 'plan', 'cerrados', 'recup'].forEach(k => { if (r[k] && typeof r[k] === 'object' && !Array.isArray(r[k])) d[k] = r[k]; });
-        ['peso', 'presion', 'colesterol', 'spo2'].forEach(k => { if (Array.isArray(r[k])) d[k] = r[k]; });
-        if (r.sensor && typeof r.sensor === 'object' && Number.isFinite(r.sensor.last)) d.sensor = { last: r.sensor.last, t: r.sensor.t || 0 };
+    let raw = null, r = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { /* almacenamiento bloqueado */ }
+    if (raw) {
+      try { r = JSON.parse(raw); } catch (e) { guardarCopia(KEY + '_corrupto', raw); }
+    }
+    if (esObjeto(r)) {
+      const vOld = Number.isFinite(r.v) ? r.v : 1;
+      if (vOld < VERSION) guardarCopia(`${KEY}_antes_v${VERSION}`, raw);
+      Object.keys(r).forEach(k => { if (!CONOCIDAS.includes(k)) d[k] = r[k]; });
+      if (esObjeto(r.settings)) Object.assign(d.settings, r.settings);
+      ['days', 'dolor', 'plan', 'cerrados', 'recup'].forEach(k => { if (esObjeto(r[k])) d[k] = r[k]; });
+      ['peso', 'presion', 'colesterol', 'spo2', 'aero'].forEach(k => { if (Array.isArray(r[k])) d[k] = r[k]; });
+      if (esObjeto(r.comida)) {
+        d.comida = Object.assign({}, r.comida);
+        d.comida.items = Array.isArray(r.comida.items) ? r.comida.items.filter(x => x && typeof x.id === 'string' && typeof x.n === 'string' && x.n.trim()) : ITEMS_COMIDA();
       }
-    } catch (e) { /* datos corruptos: se parte de cero */ }
+      if (r.sensor && typeof r.sensor === 'object' && Number.isFinite(r.sensor.last)) d.sensor = { last: r.sensor.last, t: r.sensor.t || 0 };
+      d.v = Math.max(VERSION, vOld);
+    }
     if (!d.settings.agDesde) d.settings.agDesde = ymd(new Date());
     ['agRutDias', 'agCoreDias'].forEach(k => { if (!Array.isArray(d.settings[k])) d.settings[k] = DEFAULTS().settings[k]; });
     return d;
@@ -351,6 +380,7 @@
     }
     const us = S.spo2.slice().sort((a, b) => b.ts - a.ts)[0];
     if (us && ymd(new Date(us.ts)) === hoy() && spo2Nivel(us) !== 'ok') aviso += `<div class="card warn"><b>Saturación de hoy: ${us.spo2}%</b><p>${spo2Msg}</p></div>`;
+    if (hayDatos() && diasSinRespaldo() >= 7 && s.respaldoPospuesto !== hoy()) aviso += `<div class="card warn"><b>💾 Hacé un respaldo de tus datos</b><p>${s.ultimoRespaldo ? 'Hace ' + diasSinRespaldo() + ' días que no exportás un respaldo.' : 'Todavía no exportaste ningún respaldo.'} Tus datos viven solo en este teléfono: si lo perdés o desinstalás la app, se pierden.</p><div class="row"><button class="pri grow" data-a="export">Exportar respaldo</button><button class="ghost grow" data-a="resp-luego">Más tarde</button></div></div>`;
     const pend = pendientes();
     if (pend.length) aviso += `<div class="card warn"><b>Espalda: tenés ${pend.length === 1 ? 'una sesión pendiente' : pend.length + ' sesiones pendientes'}</b><p>Podés repartirlo en las próximas sesiones o dejarlo así.</p><div class="row"><button class="ghost" data-a="tab" data-t="espalda">Ver pendientes</button></div></div>`;
     return `<h2>${DIAS[now.getDay()]} ${now.getDate()} de ${MESES[now.getMonth()]}</h2>${aviso}
@@ -528,27 +558,28 @@
       <div class="grid2">${f('pSis', 'Máxima (sistólica)', s.pSis)}${f('pDia', 'Mínima (diastólica)', s.pDia)}</div>
       <h3 style="margin-top:14px">Agenda de ejercicios</h3>
       <small>${NATIVE ? 'Te avisa con notificaciones aunque la app esté cerrada.' : 'Los avisos de agenda funcionan en la app Android.'}</small>
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="agRutOn" ${s.agRutOn ? 'checked' : ''}>Rutina de la mañana</label>
+      <label class="chk"><input type="checkbox" name="agRutOn" ${s.agRutOn ? 'checked' : ''}>Rutina de la mañana</label>
       <div class="dias">${diaChips('agRutDias', s.agRutDias)}</div>
       <label for="s_agRutHora">Hora</label><input id="s_agRutHora" name="agRutHora" type="time" value="${esc(s.agRutHora)}">
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="agCoreOn" ${s.agCoreOn ? 'checked' : ''}>Espalda y core</label>
+      <label class="chk"><input type="checkbox" name="agCoreOn" ${s.agCoreOn ? 'checked' : ''}>Espalda y core</label>
       <div class="dias">${diaChips('agCoreDias', s.agCoreDias)}</div>
       <label for="s_agCoreHora">Hora</label><input id="s_agCoreHora" name="agCoreHora" type="time" value="${esc(s.agCoreHora)}">
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="seguirOn" ${s.seguirOn ? 'checked' : ''}>Preguntarme a la noche si hice la espalda (y recordarlo al otro día)</label>
+      <label class="chk"><input type="checkbox" name="seguirOn" ${s.seguirOn ? 'checked' : ''}>Preguntarme a la noche si hice la espalda (y recordarlo al otro día)</label>
       <label for="s_seguirHora">Hora de la pregunta</label><input id="s_seguirHora" name="seguirHora" type="time" value="${esc(s.seguirHora)}">
       <h3 style="margin-top:14px">Recordatorio de agua</h3>
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recAgua" ${s.recAgua ? 'checked' : ''}>Avisar cada cierto tiempo${NATIVE ? '' : ' (solo con la app abierta)'}</label>
+      <label class="chk"><input type="checkbox" name="recAgua" ${s.recAgua ? 'checked' : ''}>Avisar cada cierto tiempo${NATIVE ? '' : ' (solo con la app abierta)'}</label>
       ${f('recMin', 'Cada cuántos minutos', s.recMin, 'min="15"')}
       <h3 style="margin-top:14px">Saturación (saturómetro)</h3><small>Consultá con tu médico qué valor usar como umbral.</small>
       <div class="grid2">${f('spo2Min', 'Umbral de aviso (%)', s.spo2Min)}</div>
-      <label style="display:flex;align-items:center;color:var(--fg)"><input type="checkbox" name="recSpo2" ${s.recSpo2 ? 'checked' : ''}>Recordarme medirla${NATIVE ? '' : ' (solo con la app abierta)'}</label>
+      <label class="chk"><input type="checkbox" name="recSpo2" ${s.recSpo2 ? 'checked' : ''}>Recordarme medirla${NATIVE ? '' : ' (solo con la app abierta)'}</label>
       <label for="s_horasSpo2">Horarios (HH:MM separados por coma)</label><input id="s_horasSpo2" name="horasSpo2" type="text" value="${esc(s.horasSpo2)}" placeholder="09:00, 21:00" style="min-height:44px">
       <label for="s_notas">Indicaciones de mi médico / kinesiólogo</label><textarea id="s_notas" name="notas" maxlength="1000" placeholder="Ej: evitar flexión de columna con carga; caminar 30 min diarios">${esc(s.notas)}</textarea>
       <div class="row" style="margin-top:10px"><button class="pri grow" type="submit">Guardar ajustes</button></div></form>
     <div class="card"><h3>Datos</h3>
-      <p class="muted">Todo se guarda solo en este dispositivo. Hacé copias de seguridad.</p>
-      <div class="row"><button class="ghost grow" data-a="informe">Informe para el médico</button><button class="ghost grow" data-a="export">Exportar copia</button></div>
-      <div class="row" style="margin-top:8px"><button class="ghost grow" data-a="import">Importar copia</button><button class="dang grow" data-a="borrar">Borrar todo</button></div>
+      <p class="muted">Todo se guarda solo en este dispositivo. Hacé copias de seguridad. Último respaldo: <b>${s.ultimoRespaldo ? fmtFecha(ymd(new Date(s.ultimoRespaldo))) : 'nunca'}</b>.</p>
+      <div class="row"><button class="pri grow" data-a="export">Exportar respaldo (JSON)</button><button class="ghost grow" data-a="copiar">Copiar respaldo</button></div>
+      <div class="row" style="margin-top:8px"><button class="ghost grow" data-a="informe">Informe para el médico</button><button class="ghost grow" data-a="import">Importar respaldo</button></div>
+      <div class="row" style="margin-top:8px"><button class="dang grow" data-a="borrar">Borrar todo</button></div>
       <input id="fileIn" type="file" accept="application/json,.json" hidden>
     </div>
     <p class="foot">Salud Activa v${APP_V}${NATIVE ? ' (Android)' : ''}</p>`;
@@ -569,22 +600,50 @@
     const d = day(); d.agua = Math.max(0, d.agua + sign * S.settings.vaso); changed();
   }
 
-  function exportar() {
-    const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `salud-activa-${hoy()}.json`;
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  /* ---------- Respaldo ---------- */
+  const hayDatos = () => S.peso.length + S.presion.length + S.colesterol.length + S.spo2.length + S.aero.length > 0 || Object.values(S.days).some(x => x && (x.pasos || x.agua || Object.keys(x.rutina || {}).length || Object.keys(x.core || {}).length || x.comida || x.pescado));
+  const diasSinRespaldo = () => (S.settings.ultimoRespaldo ? Math.floor((Date.now() - S.settings.ultimoRespaldo) / 864e5) : Infinity);
+  const marcarRespaldo = () => { S.settings.ultimoRespaldo = Date.now(); S.settings.respaldoPospuesto = ''; save(); };
+  async function exportar() {
+    const json = JSON.stringify(S, null, 2), nombre = `salud-activa-respaldo-${hoy()}.json`;
+    try {
+      const F = plug('Filesystem'), Sh = plug('Share');
+      if (NATIVE && F && Sh) {
+        // En el APK no hay descargas del navegador: se guarda en la caché de la app y se abre el menú de compartir.
+        const r = await F.writeFile({ path: nombre, data: json, directory: 'CACHE', encoding: 'utf8' });
+        await Sh.share({ title: 'Respaldo de Salud Activa', text: 'Respaldo de mis datos de Salud Activa', files: [r.uri], dialogTitle: 'Guardar el respaldo en…' });
+        marcarRespaldo(); toast('Elegí dónde guardarlo: Drive, correo o WhatsApp');
+      } else {
+        const blob = new Blob([json], { type: 'application/json' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre;
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        marcarRespaldo(); toast('Respaldo exportado');
+      }
+      render();
+    } catch (e) { toast('No se pudo exportar. Probá "Copiar respaldo".'); }
+  }
+  async function copiarRespaldo() {
+    try { await navigator.clipboard.writeText(JSON.stringify(S, null, 2)); marcarRespaldo(); toast('Respaldo copiado: pegalo en una nota o un mensaje a vos mismo'); render(); }
+    catch (e) { toast('No se pudo copiar'); }
   }
   function importar(file) {
     const rd = new FileReader();
     rd.onload = () => {
       try {
         const r = JSON.parse(rd.result);
-        if (!r || typeof r !== 'object' || !r.days || !Array.isArray(r.peso)) throw new Error('formato');
-        if (!confirm('Esto reemplaza los datos actuales. ¿Continuar?')) return;
-        localStorage.setItem(KEY, JSON.stringify(r)); S = load(); setupReminders(); changed(); toast('Copia importada');
+        if (!esObjeto(r) || !esObjeto(r.days) || !Array.isArray(r.peso)) throw new Error('formato');
+        if (!confirm('Esto reemplaza los datos actuales por los de la copia. ¿Continuar?')) return;
+        try { const actual = localStorage.getItem(KEY); if (actual) guardarCopia(KEY + '_antes_importar', actual, true); } catch (e) { /* nada */ } // por si se importó el archivo equivocado
+        localStorage.setItem(KEY, JSON.stringify(r)); S = load(); save(); setupReminders(); changed(); toast('Copia importada');
       } catch (e) { toast('El archivo no es una copia válida'); }
     };
     rd.readAsText(file);
+  }
+  function borrarTodo() {
+    if (hayDatos() && confirm('Antes de borrar: ¿querés exportar un respaldo? Aceptá para exportarlo (no se borra nada todavía).')) { exportar(); return; }
+    if (!confirm('Se borran TODOS tus datos de este dispositivo y no se pueden recuperar. ¿Seguro?')) return;
+    if (!confirm('Última confirmación: ¿borrar todo?')) return;
+    S = DEFAULTS(); setupReminders(); changed(); toast('Datos borrados');
   }
 
   function informe() {
@@ -655,9 +714,11 @@
         break;
       }
       case 'export': exportar(); break;
+      case 'copiar': copiarRespaldo(); break;
+      case 'resp-luego': S.settings.respaldoPospuesto = hoy(); changed(); break;
       case 'import': $('#fileIn').click(); break;
       case 'informe': informe(); break;
-      case 'borrar': if (confirm('Se borran todos tus datos de este dispositivo. ¿Seguro?')) { S = DEFAULTS(); setupReminders(); changed(); toast('Datos borrados'); } break;
+      case 'borrar': borrarTodo(); break;
     }
   });
 
